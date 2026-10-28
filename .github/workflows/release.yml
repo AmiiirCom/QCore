@@ -9,6 +9,9 @@ permissions:
   contents: write
 
 jobs:
+  # ==========================================================
+  # جاب اول: بیلد و تفکیک باینری‌های سرور و کلاینت
+  # ==========================================================
   build:
     name: Build - ${{ matrix.arch_name }}
     runs-on: ${{ matrix.os }}
@@ -19,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ۱. لینوکس استاتیک x86_64 (سازگار با همه لینوکس‌ها + تولید خودکار پکیج‌های deb و arch)
+          # --- لینوکس مدرن (دبیان، اوبونتو، آرچ، سنت‌او‌اس و...) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             arch_name: linux-x86_64-musl
@@ -29,7 +32,6 @@ jobs:
             deb_arch: amd64
             pacman_arch: x86_64
 
-          # ۲. لینوکس استاتیک ARM64 (تولید خودکار پکیج deb برای ARM64)
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             arch_name: linux-aarch64-musl
@@ -39,41 +41,58 @@ jobs:
             deb_arch: arm64
             pacman_arch: aarch64
 
-          # ۳. لینوکس استاندارد gnu
+          # --- روترهای میکروتیک (MikroTik RouterOS v7) ---
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            arch_name: linux-x86_64-gnu
+            target: aarch64-unknown-linux-musl
+            arch_name: mikrotik-routeros-arm64
+            use_cross: true
+            is_windows: false
+            package_deb_arch: false
+
+          - os: ubuntu-latest
+            target: armv7-unknown-linux-musleabihf
+            arch_name: mikrotik-routeros-armv7
+            use_cross: true
+            is_windows: false
+            package_deb_arch: false
+
+          # --- سیستم‌عامل FreeBSD ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-freebsd
+            arch_name: freebsd-x86_64
+            use_cross: true
+            is_windows: false
+            package_deb_arch: false
+
+          # --- ویندوز ۱۰ و ۱۱ (AMD64 و ARM64) ---
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch_name: windows-x86_64-win10-11
+            use_cross: false
+            is_windows: true
+            package_deb_arch: false
+
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch_name: windows-arm64-win11
+            use_cross: false
+            is_windows: true
+            package_deb_arch: false
+
+          # --- مکینتاش مدرن (macOS 13+) ---
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch_name: macos-arm64-modern
             use_cross: false
             is_windows: false
             package_deb_arch: false
 
-          # ۴. ویندوز ۶۴ بیتی استاندارد (AMD و Intel)
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            arch_name: windows-x86_64
-            use_cross: false
-            is_windows: true
-
-          # ۵. ویندوز پردازنده‌های ARM (Snapdragon / Surface)
-          - os: windows-latest
-            target: aarch64-pc-windows-msvc
-            arch_name: windows-arm64
-            use_cross: false
-            is_windows: true
-
-          # ۶. مکینتاش پردازنده‌های اپل (M1 تا M4)
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            arch_name: macos-arm64
-            use_cross: false
-            is_windows: false
-
-          # ۷. مکینتاش پردازنده‌های اینتل
           - os: macos-latest
             target: x86_64-apple-darwin
-            arch_name: macos-x86_64
+            arch_name: macos-x86_64-modern
             use_cross: false
             is_windows: false
+            package_deb_arch: false
 
     steps:
       - name: Checkout Repository
@@ -84,114 +103,198 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install Cross for Linux
+      - name: Set macOS Deployment Target (Latest Versions)
+        if: startsWith(matrix.os, 'macos')
+        run: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
+
+      - name: Install Cross for Multi-Arch
         if: matrix.use_cross
         run: |
           cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build Project (Standard)
+      - name: Build Binaries (Standard)
         if: "!matrix.use_cross"
         run: |
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Build Project (Cross)
+      - name: Build Binaries (Cross)
         if: matrix.use_cross
         run: |
           cross build --release --target ${{ matrix.target }}
 
-      # بسته‌بندی فایل‌های ویندوز (.zip)
-      - name: Package Windows Binary
+      # بسته‌بندی مجزا برای ویندوز (تولید ۲ فایل Zip جدا برای سرور و کلاینت)
+      - name: Package Windows Binaries (Separated)
         if: matrix.is_windows
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}"
-          $distName = "qcore-${tag}-${{ matrix.arch_name }}"
-          New-Item -ItemType Directory -Force -Path $distName
-          Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$distName/"
-          Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$distName/"
-          Compress-Archive -Path "$distName/*" -DestinationPath "${distName}.zip"
-          Get-FileHash -Algorithm SHA256 "${distName}.zip" | ForEach-Object { "$($_.Hash)  ${distName}.zip" } | Out-File -Encoding ascii "${distName}.zip.sha256"
           New-Item -ItemType Directory -Force -Path artifacts
-          Move-Item "${distName}.zip" artifacts/
-          Move-Item "${distName}.zip.sha256" artifacts/
 
-      # بسته‌بندی فایل‌های فشرده لینوکس و مک (.tar.gz)
-      - name: Package Unix Archive
+          # ۱. بسته مجزای سرور ویندوز
+          $serverName = "qcore-server-${tag}-${{ matrix.arch_name }}"
+          New-Item -ItemType Directory -Force -Path $serverName
+          Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$serverName/"
+          Compress-Archive -Path "$serverName/*" -DestinationPath "artifacts/${serverName}.zip"
+          cd artifacts
+          Get-FileHash -Algorithm SHA256 "${serverName}.zip" | ForEach-Object { "$($_.Hash)  ${serverName}.zip" } | Out-File -Encoding ascii "${serverName}.zip.sha256"
+          cd ..
+
+          # ۲. بسته مجزای کلاینت ویندوز
+          $clientName = "qcore-client-${tag}-${{ matrix.arch_name }}"
+          New-Item -ItemType Directory -Force -Path $clientName
+          Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$clientName/"
+          Compress-Archive -Path "$clientName/*" -DestinationPath "artifacts/${clientName}.zip"
+          cd artifacts
+          Get-FileHash -Algorithm SHA256 "${clientName}.zip" | ForEach-Object { "$($_.Hash)  ${clientName}.zip" } | Out-File -Encoding ascii "${clientName}.zip.sha256"
+          cd ..
+
+      # بسته‌بندی مجزا برای لینوکس، مک، FreeBSD و میکروتیک (.tar.gz جداگانه)
+      - name: Package Unix Binaries (Separated)
         if: "!matrix.is_windows"
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
-          DIST_NAME="qcore-${TAG}-${{ matrix.arch_name }}"
-          mkdir -p "${DIST_NAME}"
-          cp "target/${{ matrix.target }}/release/qcore-server" "${DIST_NAME}/"
-          cp "target/${{ matrix.target }}/release/qcore-client" "${DIST_NAME}/"
-          tar -czvf "${DIST_NAME}.tar.gz" "${DIST_NAME}"
-          shasum -a 256 "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256"
           mkdir -p artifacts
-          mv "${DIST_NAME}.tar.gz" artifacts/
-          mv "${DIST_NAME}.tar.gz.sha256" artifacts/
 
-      # ساخت پکیج‌های رسمی دبیان (.deb) و آرچ لینوکس (.pkg.tar.zst)
-      - name: Build Debian (.deb) and Arch Linux (.pkg.tar.zst) Packages
+          # ۱. بسته مجزای سرور لینوکس/یونیکس
+          SERVER_NAME="qcore-server-${TAG}-${{ matrix.arch_name }}"
+          mkdir -p "${SERVER_NAME}"
+          cp "target/${{ matrix.target }}/release/qcore-server" "${SERVER_NAME}/"
+          tar -czvf "artifacts/${SERVER_NAME}.tar.gz" -C "${SERVER_NAME}" .
+          cd artifacts
+          shasum -a 256 "${SERVER_NAME}.tar.gz" > "${SERVER_NAME}.tar.gz.sha256"
+          cd ..
+
+          # ۲. بسته مجزای کلاینت لینوکس/یونیکس
+          CLIENT_NAME="qcore-client-${TAG}-${{ matrix.arch_name }}"
+          mkdir -p "${CLIENT_NAME}"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${CLIENT_NAME}/"
+          tar -czvf "artifacts/${CLIENT_NAME}.tar.gz" -C "${CLIENT_NAME}" .
+          cd artifacts
+          shasum -a 256 "${CLIENT_NAME}.tar.gz" > "${CLIENT_NAME}.tar.gz.sha256"
+          cd ..
+
+      # ساخت پکیج‌های رسمی نصبی دبیان (.deb) و آرچ (.pkg.tar.zst) به صورت مجزا
+      - name: Build Debian (.deb) and Arch (.pkg.tar.zst) Packages (Separated)
         if: matrix.package_deb_arch
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
           CLEAN_VER="${TAG#v}"
 
-          # --- ۱. پکیج رسمی دبیان/اوبونتو (.deb) ---
-          DEB_DIR="deb_package"
-          mkdir -p "${DEB_DIR}/DEBIAN"
-          mkdir -p "${DEB_DIR}/usr/local/bin"
-          mkdir -p "${DEB_DIR}/etc/systemd/system"
-          mkdir -p "${DEB_DIR}/etc/qcore"
+          # --- ۱. پکیج دبیان مجزای سرور (شامل سرویس Systemd) ---
+          DEB_SERVER="deb_server"
+          mkdir -p "${DEB_SERVER}/DEBIAN" "${DEB_SERVER}/usr/local/bin" "${DEB_SERVER}/etc/systemd/system" "${DEB_SERVER}/etc/qcore"
+          cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_SERVER}/usr/local/bin/"
+          chmod 755 "${DEB_SERVER}/usr/local/bin/qcore-server"
 
-          cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_DIR}/usr/local/bin/"
-          cp "target/${{ matrix.target }}/release/qcore-client" "${DEB_DIR}/usr/local/bin/"
-          chmod 755 "${DEB_DIR}/usr/local/bin/qcore-server" "${DEB_DIR}/usr/local/bin/qcore-client"
+          cat <<EOF > "${DEB_SERVER}/etc/systemd/system/qcore-server.service"
+          [Unit]
+          Description=QCore Quantum-Resistant High-Stealth Server
+          After=network.target
 
-          cat <<EOF > "${DEB_DIR}/DEBIAN/control"
-          Package: qcore
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/usr/local/bin/qcore-server
+          Restart=always
+          RestartSec=3
+          LimitNOFILE=1048576
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          cat <<EOF > "${DEB_SERVER}/DEBIAN/control"
+          Package: qcore-server
           Version: ${CLEAN_VER}
           Section: net
           Priority: optional
           Architecture: ${{ matrix.deb_arch }}
           Maintainer: QCore Team
-          Description: QCore Quantum-Resistant High-Stealth Anti-Censorship Proxy Core
+          Description: QCore High-Stealth Anti-Censorship Server Daemon
           EOF
 
-          cat <<EOF > "${DEB_DIR}/DEBIAN/postinst"
+          cat <<EOF > "${DEB_SERVER}/DEBIAN/postinst"
           #!/bin/sh
           systemctl daemon-reload
-          echo "QCore installed successfully! Run 'qcore-server setup' to initialize."
+          echo "QCore Server installed. Run 'qcore-server setup' to initialize."
           EOF
-          chmod 755 "${DEB_DIR}/DEBIAN/postinst"
+          chmod 755 "${DEB_SERVER}/DEBIAN/postinst"
 
-          dpkg-deb --build "${DEB_DIR}" "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb"
-          shasum -a 256 "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
+          dpkg-deb --build "${DEB_SERVER}" "artifacts/qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb"
+          cd artifacts
+          shasum -a 256 "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
+          cd ..
 
-          # --- ۲. پکیج رسمی آرچ لینوکس (.pkg.tar.zst) ---
-          ARCH_DIR="arch_package"
-          mkdir -p "${ARCH_DIR}/usr/local/bin"
-          cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_DIR}/usr/local/bin/"
-          cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_DIR}/usr/local/bin/"
+          # --- ۲. پکیج دبیان مجزای کلاینت ---
+          DEB_CLIENT="deb_client"
+          mkdir -p "${DEB_CLIENT}/DEBIAN" "${DEB_CLIENT}/usr/local/bin"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${DEB_CLIENT}/usr/local/bin/"
+          chmod 755 "${DEB_CLIENT}/usr/local/bin/qcore-client"
 
-          cat <<EOF > "${ARCH_DIR}/.PKGINFO"
-          pkgname = qcore
+          cat <<EOF > "${DEB_CLIENT}/DEBIAN/control"
+          Package: qcore-client
+          Version: ${CLEAN_VER}
+          Section: net
+          Priority: optional
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: QCore Team
+          Description: QCore Cross-Platform Client & Local Inbounds
+          EOF
+
+          dpkg-deb --build "${DEB_CLIENT}" "artifacts/qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb"
+          cd artifacts
+          shasum -a 256 "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
+          cd ..
+
+          # --- ۳. پکیج آرچ لینوکس مجزای سرور ---
+          ARCH_SERVER="arch_server"
+          mkdir -p "${ARCH_SERVER}/usr/local/bin"
+          cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_SERVER}/usr/local/bin/"
+
+          cat <<EOF > "${ARCH_SERVER}/.PKGINFO"
+          pkgname = qcore-server
           pkgver = ${CLEAN_VER}-1
-          pkgdesc = QCore Quantum-Resistant High-Stealth Anti-Censorship Proxy Core
+          pkgdesc = QCore High-Stealth Anti-Censorship Server Daemon
           url = https://github.com/${{ github.repository }}
           builddate = $(date +%s)
           packager = QCore Team
-          size = $(du -sb "${ARCH_DIR}/usr" | awk '{print $1}')
+          size = $(du -sb "${ARCH_SERVER}/usr" | awk '{print $1}')
           arch = ${{ matrix.pacman_arch }}
           license = MIT
           EOF
 
-          cd "${ARCH_DIR}"
-          tar -cf - .PKGINFO usr | zstd -c -T0 > "../artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst"
+          cd "${ARCH_SERVER}"
+          tar -cf - .PKGINFO usr | zstd -c -T0 > "../artifacts/qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst"
           cd ..
-          shasum -a 256 "artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
+          cd artifacts
+          shasum -a 256 "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
+          cd ..
+
+          # --- ۴. پکیج آرچ لینوکس مجزای کلاینت ---
+          ARCH_CLIENT="arch_client"
+          mkdir -p "${ARCH_CLIENT}/usr/local/bin"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_CLIENT}/usr/local/bin/"
+
+          cat <<EOF > "${ARCH_CLIENT}/.PKGINFO"
+          pkgname = qcore-client
+          pkgver = ${CLEAN_VER}-1
+          pkgdesc = QCore Cross-Platform Client & Local Inbounds
+          url = https://github.com/${{ github.repository }}
+          builddate = $(date +%s)
+          packager = QCore Team
+          size = $(du -sb "${ARCH_CLIENT}/usr" | awk '{print $1}')
+          arch = ${{ matrix.pacman_arch }}
+          license = MIT
+          EOF
+
+          cd "${ARCH_CLIENT}"
+          tar -cf - .PKGINFO usr | zstd -c -T0 > "../artifacts/qcore-client-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst"
+          cd ..
+          cd artifacts
+          shasum -a 256 "qcore-client-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "qcore-client-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
+          cd ..
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
@@ -200,10 +303,62 @@ jobs:
           path: src/artifacts/*
           if-no-files-found: error
 
-  # مرحله انتشار در Releases
+  # ==========================================================
+  # جاب دوم: بیلد کلاینت اندروید (JNI .so و باینری CLI ترموکس)
+  # ==========================================================
+  build-android:
+    name: Build - Android Client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, armv7-linux-androideabi
+
+      - name: Setup Android NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> $GITHUB_ENV
+          cargo install cargo-ndk
+
+      - name: Build Android Client Packages
+        run: |
+          TAG="${{ github.ref_name }}"
+          mkdir -p artifacts jniLibs/arm64-v8a jniLibs/armeabi-v7a termux-bin
+
+          # ۱. کتابخانه JNI مخصوص اپلیکیشن‌های اندروید
+          cargo ndk -t arm64-v8a -t armeabi-v7a -o ./jniLibs build --release -p qcore-client --lib
+
+          # ۲. باینری اجرایی کلاینت برای ترموکس
+          cargo ndk -t arm64-v8a build --release --bin qcore-client
+          cp target/aarch64-linux-android/release/qcore-client termux-bin/qcore-client-arm64
+
+          zip -r "artifacts/qcore-client-${TAG}-android-jniLibs.zip" jniLibs
+          tar -czvf "artifacts/qcore-client-${TAG}-android-termux-cli.tar.gz" -C termux-bin .
+
+          cd artifacts
+          shasum -a 256 "qcore-client-${TAG}-android-jniLibs.zip" > "qcore-client-${TAG}-android-jniLibs.zip.sha256"
+          shasum -a 256 "qcore-client-${TAG}-android-termux-cli.tar.gz" > "qcore-client-${TAG}-android-termux-cli.tar.gz.sha256"
+          cd ..
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-android
+          path: src/artifacts/*
+          if-no-files-found: error
+
+  # ==========================================================
+  # جاب سوم: انتشار منظم و دسته‌بندی‌شده در صفحه Releases
+  # ==========================================================
   release:
     name: Publish Release
-    needs: build
+    needs: [build, build-android]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code with Full Git History
