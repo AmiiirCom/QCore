@@ -1,0 +1,63 @@
+# ==============================================================
+# QCore Industrial Anti-Censorship Core - Git Ignore Rules
+# ==============================================================
+
+# --- ۱. خروجی‌های کامپایل و باینری‌های Rust و Cargo ---
+target/
+**/target/
+**/*.rs.bk
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+
+# --- ۲. فایل‌های امنیتی و اطلاعات حساس (بسیار مهم) ---
+# این فایل‌ها حاوی کلیدهای خصوصی پسا-کوانتوم (ML-KEM)، توکن‌ها و UUID هستند
+# و به هیچ وجه نباید در گیت کامیت شوند:
+server_config.json
+client_config.json
+**/server_config.json
+**/client_config.json
+*.key
+*.pem
+*.crt
+*.dat
+*.pfx
+
+# --- ۳. فایل‌های بسته‌بندی محلی و خروجی‌های موقت CI/CD ---
+dist/
+artifacts/
+**/artifacts/
+*.zip
+*.tar.gz
+*.sha256
+RELEASE_NOTES.md
+
+# --- ۴. تنظیمات محیط‌های توسعه و ویرایشگرها (IDEs) ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+.fleet/
+
+# --- ۵. فایل‌های اضافی سیستم‌عامل‌ها (ویندوز، مک و لینوکس) ---
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory

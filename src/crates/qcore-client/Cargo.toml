@@ -1,0 +1,30 @@
+[package]
+name = "qcore-client"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "qcore_client_core"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "qcore-client"
+path = "src/main.rs"
+
+[dependencies]
+qcore-crypto = { path = "../qcore-crypto" }
+qcore-tls-synth = { path = "../qcore-tls-synth" }
+qcore-transport = { path = "../qcore-transport" }
+tokio = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+rand = { workspace = true }

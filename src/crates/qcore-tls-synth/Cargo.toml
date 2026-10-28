@@ -1,0 +1,8 @@
+[package]
+name = "qcore-tls-synth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+rand = { workspace = true }

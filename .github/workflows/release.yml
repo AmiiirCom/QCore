@@ -1,0 +1,191 @@
+name: QCore Automated Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build - ${{ matrix.arch_name }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ۱. لینوکس ۶۴ بیتی سرور (استاتیک کامل بدون وابستگی)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            arch_name: linux-x86_64
+            use_cross: true
+            is_windows: false
+
+          # ۲. لینوکس سرور ARM64 (سرورهای اوراکل و مینی‌پی‌سی‌ها)
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            arch_name: linux-aarch64
+            use_cross: true
+            is_windows: false
+
+          # ۳. ویندوز ۶۴ بیتی
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch_name: windows-x86_64
+            use_cross: false
+            is_windows: true
+
+          # ۴. مکینتاش با پردازنده‌های Apple Silicon (M1/M2/M3/M4)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch_name: macos-arm64
+            use_cross: false
+            is_windows: false
+
+          # ۵. مکینتاش اینتل
+          - os: macos-13
+            target: x86_64-apple-darwin
+            arch_name: macos-x86_64
+            use_cross: false
+            is_windows: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Cross for Linux
+        if: matrix.use_cross
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build Project (Standard)
+        if: "!matrix.use_cross"
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Build Project (Cross for Musl/ARM)
+        if: matrix.use_cross
+        run: |
+          cross build --release --target ${{ matrix.target }}
+
+      # بسته‌بندی خروجی‌های ویندوز
+      - name: Package Windows Binary
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $distName = "qcore-${tag}-${{ matrix.arch_name }}"
+          New-Item -ItemType Directory -Force -Path $distName
+          Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$distName/"
+          Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$distName/"
+          Compress-Archive -Path "$distName/*" -DestinationPath "${distName}.zip"
+          Get-FileHash -Algorithm SHA256 "${distName}.zip" | ForEach-Object { "$($_.Hash)  ${distName}.zip" } | Out-File -Encoding ascii "${distName}.zip.sha256"
+          New-Item -ItemType Directory -Force -Path artifacts
+          Move-Item "${distName}.zip" artifacts/
+          Move-Item "${distName}.zip.sha256" artifacts/
+
+      # بسته‌بندی خروجی‌های لینوکس و مک
+      - name: Package Unix Binary
+        if: "!matrix.is_windows"
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          DIST_NAME="qcore-${TAG}-${{ matrix.arch_name }}"
+          mkdir -p "${DIST_NAME}"
+          cp "target/${{ matrix.target }}/release/qcore-server" "${DIST_NAME}/"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${DIST_NAME}/"
+          tar -czvf "${DIST_NAME}.tar.gz" "${DIST_NAME}"
+          shasum -a 256 "${DIST_NAME}.tar.gz" > "${DIST_NAME}.tar.gz.sha256"
+          mkdir -p artifacts
+          mv "${DIST_NAME}.tar.gz" artifacts/
+          mv "${DIST_NAME}.tar.gz.sha256" artifacts/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.arch_name }}
+          path: src/artifacts/*
+          if-no-files-found: error
+
+  # مرحله انتشار در صفحه Releases با ثبت پویای عنوان و توضیحات کامیت‌ها
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code with Full Git History
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Built Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: package-*
+          merge-multiple: true
+
+      # استخراج کاملاً داینامیک عنوان و توضیحات کامیت‌ها با پایتون
+      - name: Generate Dynamic Changelog
+        shell: bash
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..${{ github.ref_name }}"
+            HEADER="## 📋 تغییرات نسخه ${{ github.ref_name }} (نسبت به $PREV_TAG):"
+          else
+            RANGE="${{ github.ref_name }}"
+            HEADER="## 📋 تمامی تغییرات در نگارش ${{ github.ref_name }}:"
+          fi
+
+          echo "$HEADER" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          python3 -c "
+          import subprocess
+
+          range_arg = '$RANGE'
+          cmd = ['git', 'log', range_arg, '--pretty=format:__COMMIT__%h|%s|%b']
+          res = subprocess.check_output(cmd).decode('utf-8', errors='ignore')
+
+          commits = res.split('__COMMIT__')
+          lines = []
+          for c in commits:
+              if not c.strip():
+                  continue
+              parts = c.split('|', 2)
+              h = parts[0]
+              s = parts[1].strip()
+              b = parts[2].strip() if len(parts) > 2 else ''
+              
+              entry = f'* **{s}** (\`{h}\`)'
+              if b:
+                  indented_body = '\n'.join('  > ' + line for line in b.splitlines() if line.strip())
+                  entry += f'\n{indented_body}'
+              lines.append(entry)
+
+          with open('RELEASE_NOTES.md', 'a', encoding='utf-8') as f:
+              f.write('\n\n'.join(lines) + '\n')
+          "
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: QCore ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

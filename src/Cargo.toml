@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "crates/qcore-crypto",
+    "crates/qcore-tls-synth",
+    "crates/qcore-transport",
+    "crates/qcore-server",
+    "crates/qcore-client",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2026"
+authors = ["QCore Core Development Team"]
+license = "MIT OR Apache-2.0"
+
+
+
+[workspace.dependencies]
+# جدیدترین نسخه‌های تاییدشده در اکوسیستم Rust
+tokio = { version = "1.54", features = ["full"] }
+x25519-dalek = { version = "3.0", features = ["static_secrets"] }
+blake3 = "1.8"
+ml-kem = "0.2"
+chacha20poly1305 = "0.10"
+bytes = "1.10"
+socket2 = "0.5"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+base64 = "0.22"
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rand = "0.8"
+
+
+[profile.release]
+opt-level = 3           # بالاترین سطح بهینه‌سازی سرعت
+lto = true              # فعال‌سازی Link Time Optimization در تمام کریت‌ها
+codegen-units = 1       # بهینه‌سازی یکپارچه برای کاهش باینری
+panic = "abort"         # حذف سربار پشته unwinding در زمان بروز خطای فاحش
+strip = true            # حذف کامل نمادهای دیباگ (Debug Symbols) جهت کاهش شدید حجم
