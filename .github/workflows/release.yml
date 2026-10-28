@@ -19,36 +19,57 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ۱. لینوکس ۶۴ بیتی سرور (استاتیک کامل بدون وابستگی)
+          # ۱. لینوکس استاتیک x86_64 (سازگار با همه لینوکس‌ها + تولید خودکار پکیج‌های deb و arch)
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            arch_name: linux-x86_64
+            arch_name: linux-x86_64-musl
             use_cross: true
             is_windows: false
+            package_deb_arch: true
+            deb_arch: amd64
+            pacman_arch: x86_64
 
-          # ۲. لینوکس سرور ARM64 (سرورهای اوراکل و مینی‌پی‌سی‌ها)
+          # ۲. لینوکس استاتیک ARM64 (تولید خودکار پکیج deb برای ARM64)
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
-            arch_name: linux-aarch64
+            arch_name: linux-aarch64-musl
             use_cross: true
             is_windows: false
+            package_deb_arch: true
+            deb_arch: arm64
+            pacman_arch: aarch64
 
-          # ۳. ویندوز ۶۴ بیتی
+          # ۳. لینوکس استاندارد gnu
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch_name: linux-x86_64-gnu
+            use_cross: false
+            is_windows: false
+            package_deb_arch: false
+
+          # ۴. ویندوز ۶۴ بیتی استاندارد (AMD و Intel)
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             arch_name: windows-x86_64
             use_cross: false
             is_windows: true
 
-          # ۴. مکینتاش با پردازنده‌های Apple Silicon (M1/M2/M3/M4)
+          # ۵. ویندوز پردازنده‌های ARM (Snapdragon / Surface)
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch_name: windows-arm64
+            use_cross: false
+            is_windows: true
+
+          # ۶. مکینتاش پردازنده‌های اپل (M1 تا M4)
           - os: macos-latest
             target: aarch64-apple-darwin
             arch_name: macos-arm64
             use_cross: false
             is_windows: false
 
-          # ۵. مکینتاش اینتل
-          - os: macos-13
+          # ۷. مکینتاش پردازنده‌های اینتل
+          - os: macos-latest
             target: x86_64-apple-darwin
             arch_name: macos-x86_64
             use_cross: false
@@ -73,12 +94,12 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Build Project (Cross for Musl/ARM)
+      - name: Build Project (Cross)
         if: matrix.use_cross
         run: |
           cross build --release --target ${{ matrix.target }}
 
-      # بسته‌بندی خروجی‌های ویندوز
+      # بسته‌بندی فایل‌های ویندوز (.zip)
       - name: Package Windows Binary
         if: matrix.is_windows
         shell: pwsh
@@ -94,8 +115,8 @@ jobs:
           Move-Item "${distName}.zip" artifacts/
           Move-Item "${distName}.zip.sha256" artifacts/
 
-      # بسته‌بندی خروجی‌های لینوکس و مک
-      - name: Package Unix Binary
+      # بسته‌بندی فایل‌های فشرده لینوکس و مک (.tar.gz)
+      - name: Package Unix Archive
         if: "!matrix.is_windows"
         shell: bash
         run: |
@@ -110,6 +131,68 @@ jobs:
           mv "${DIST_NAME}.tar.gz" artifacts/
           mv "${DIST_NAME}.tar.gz.sha256" artifacts/
 
+      # ساخت پکیج‌های رسمی دبیان (.deb) و آرچ لینوکس (.pkg.tar.zst)
+      - name: Build Debian (.deb) and Arch Linux (.pkg.tar.zst) Packages
+        if: matrix.package_deb_arch
+        shell: bash
+        run: |
+          TAG="${{ github.ref_name }}"
+          CLEAN_VER="${TAG#v}"
+
+          # --- ۱. پکیج رسمی دبیان/اوبونتو (.deb) ---
+          DEB_DIR="deb_package"
+          mkdir -p "${DEB_DIR}/DEBIAN"
+          mkdir -p "${DEB_DIR}/usr/local/bin"
+          mkdir -p "${DEB_DIR}/etc/systemd/system"
+          mkdir -p "${DEB_DIR}/etc/qcore"
+
+          cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_DIR}/usr/local/bin/"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${DEB_DIR}/usr/local/bin/"
+          chmod 755 "${DEB_DIR}/usr/local/bin/qcore-server" "${DEB_DIR}/usr/local/bin/qcore-client"
+
+          cat <<EOF > "${DEB_DIR}/DEBIAN/control"
+          Package: qcore
+          Version: ${CLEAN_VER}
+          Section: net
+          Priority: optional
+          Architecture: ${{ matrix.deb_arch }}
+          Maintainer: QCore Team
+          Description: QCore Quantum-Resistant High-Stealth Anti-Censorship Proxy Core
+          EOF
+
+          cat <<EOF > "${DEB_DIR}/DEBIAN/postinst"
+          #!/bin/sh
+          systemctl daemon-reload
+          echo "QCore installed successfully! Run 'qcore-server setup' to initialize."
+          EOF
+          chmod 755 "${DEB_DIR}/DEBIAN/postinst"
+
+          dpkg-deb --build "${DEB_DIR}" "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb"
+          shasum -a 256 "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "artifacts/qcore-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
+
+          # --- ۲. پکیج رسمی آرچ لینوکس (.pkg.tar.zst) ---
+          ARCH_DIR="arch_package"
+          mkdir -p "${ARCH_DIR}/usr/local/bin"
+          cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_DIR}/usr/local/bin/"
+          cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_DIR}/usr/local/bin/"
+
+          cat <<EOF > "${ARCH_DIR}/.PKGINFO"
+          pkgname = qcore
+          pkgver = ${CLEAN_VER}-1
+          pkgdesc = QCore Quantum-Resistant High-Stealth Anti-Censorship Proxy Core
+          url = https://github.com/${{ github.repository }}
+          builddate = $(date +%s)
+          packager = QCore Team
+          size = $(du -sb "${ARCH_DIR}/usr" | awk '{print $1}')
+          arch = ${{ matrix.pacman_arch }}
+          license = MIT
+          EOF
+
+          cd "${ARCH_DIR}"
+          tar -cf - .PKGINFO usr | zstd -c -T0 > "../artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst"
+          cd ..
+          shasum -a 256 "artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "artifacts/qcore-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
+
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -117,7 +200,7 @@ jobs:
           path: src/artifacts/*
           if-no-files-found: error
 
-  # مرحله انتشار در صفحه Releases با ثبت پویای عنوان و توضیحات کامیت‌ها
+  # مرحله انتشار در Releases
   release:
     name: Publish Release
     needs: build
@@ -135,26 +218,26 @@ jobs:
           pattern: package-*
           merge-multiple: true
 
-      # استخراج کاملاً داینامیک عنوان و توضیحات کامیت‌ها با پایتون
       - name: Generate Dynamic Changelog
         shell: bash
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
           if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..${{ github.ref_name }}"
-            HEADER="## 📋 تغییرات نسخه ${{ github.ref_name }} (نسبت به $PREV_TAG):"
+            export RANGE="${PREV_TAG}..${{ github.ref_name }}"
+            HEADER="## 📋 تغییرات نگارش ${{ github.ref_name }} (نسبت به $PREV_TAG):"
           else
-            RANGE="${{ github.ref_name }}"
+            export RANGE="${{ github.ref_name }}"
             HEADER="## 📋 تمامی تغییرات در نگارش ${{ github.ref_name }}:"
           fi
 
           echo "$HEADER" > RELEASE_NOTES.md
           echo "" >> RELEASE_NOTES.md
 
-          python3 -c "
+          python3 << 'EOF'
+          import os
           import subprocess
 
-          range_arg = '$RANGE'
+          range_arg = os.environ.get("RANGE", "HEAD")
           cmd = ['git', 'log', range_arg, '--pretty=format:__COMMIT__%h|%s|%b']
           res = subprocess.check_output(cmd).decode('utf-8', errors='ignore')
 
@@ -168,15 +251,15 @@ jobs:
               s = parts[1].strip()
               b = parts[2].strip() if len(parts) > 2 else ''
               
-              entry = f'* **{s}** (\`{h}\`)'
+              entry = f'* **{s}** (`{h}`)'
               if b:
-                  indented_body = '\n'.join('  > ' + line for line in b.splitlines() if line.strip())
-                  entry += f'\n{indented_body}'
+                  indented_b = '\n'.join('  > ' + line for line in b.splitlines() if line.strip())
+                  entry += f'\n{indented_b}'
               lines.append(entry)
 
           with open('RELEASE_NOTES.md', 'a', encoding='utf-8') as f:
               f.write('\n\n'.join(lines) + '\n')
-          "
+          EOF
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
