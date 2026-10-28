@@ -1,7 +1,8 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-#[no_mangle]
+/// شروع به کار موتور کلاینت از طریق Kotlin / Swift
+#[unsafe(no_mangle)]
 pub extern "C" fn qcore_client_start(config_json: *const c_char) -> i32 {
     if config_json.is_null() {
         return -1;
@@ -13,16 +14,20 @@ pub extern "C" fn qcore_client_start(config_json: *const c_char) -> i32 {
     };
 
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(r) => r,
+            Err(_) => return,
+        };
         rt.block_on(async {
-            // شروع لوکال پروکسی‌ها درون پس‌زمینه اپلیکیشن موبایل
+            // آغاز لوکال پروکسی‌ها درون پس‌زمینه اپلیکیشن موبایل
         });
     });
 
     0
 }
 
-#[no_mangle]
+/// متوقف‌سازی کلاینت
+#[unsafe(no_mangle)]
 pub extern "C" fn qcore_client_stop() -> i32 {
     0
 }
