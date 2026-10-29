@@ -32,10 +32,10 @@ impl Socks5Server {
         info!("SOCKS5 Proxy listening on {}", bind_addr);
 
         loop {
-            if let Ok((mut stream, _)) = listener.accept().await {
+            if let Ok((stream, _)) = listener.accept().await {
                 let payload = server_payload.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = Self::handle_client(&mut stream, &payload).await {
+                    if let Err(e) = Self::handle_client(stream, &payload).await {
                         debug!("SOCKS5 session ended: {}", e);
                     }
                 });
@@ -43,99 +43,105 @@ impl Socks5Server {
         }
     }
 
-    /// Handles an individual SOCKS5 client session according to RFC 1928.
-    async fn handle_client(stream: &mut TcpStream, payload: &ServerPayload) -> Result<()> {
-        let server_stream = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-            // Step 1: Version negotiation
-            let ver = stream.read_u8().await?;
-            if ver != 0x05 {
-                return Err(anyhow!("Unsupported SOCKS version: {ver}"));
-            }
-            let nmethods = stream.read_u8().await?;
-            let mut methods = vec![0u8; nmethods as usize];
-            stream.read_exact(&mut methods).await?;
-            stream.write_all(&[0x05, 0x00]).await?;
-            stream.flush().await?;
+    /// Handles an incoming SOCKS5 client connection and transfers it to the tunnel bridge.
+    async fn handle_client(mut stream: TcpStream, payload: &ServerPayload) -> Result<()> {
+        let server_stream = tokio::time::timeout(
+            HANDSHAKE_TIMEOUT,
+            Self::perform_handshake(&mut stream, payload),
+        )
+        .await
+        .map_err(|_| anyhow!("SOCKS5 negotiation timed out"))??;
 
-            // Step 2: Request evaluation
-            let req_ver = stream.read_u8().await?;
-            let cmd = stream.read_u8().await?;
-            let _rsv = stream.read_u8().await?;
-            let atyp = stream.read_u8().await?;
-
-            if req_ver != 0x05 || cmd != 0x01 {
-                stream.write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-                return Err(anyhow!("Only SOCKS5 CONNECT command is supported"));
-            }
-
-            let target_host = match atyp {
-                0x01 => {
-                    let mut ip = [0u8; 4];
-                    stream.read_exact(&mut ip).await?;
-                    Ipv4Addr::from(ip).to_string()
-                }
-                0x03 => {
-                    let len = stream.read_u8().await?;
-                    let mut domain = vec![0u8; len as usize];
-                    stream.read_exact(&mut domain).await?;
-                    String::from_utf8(domain)?
-                }
-                0x04 => {
-                    let mut ip = [0u8; 16];
-                    stream.read_exact(&mut ip).await?;
-                    Ipv6Addr::from(ip).to_string()
-                }
-                _ => return Err(anyhow!("Unsupported address type: {atyp}")),
-            };
-
-            let target_port = stream.read_u16().await?;
-
-            let mut server_stream = TcpStream::connect(&payload.endpoint)
-                .await
-                .map_err(|e| anyhow!("Failed to connect to QCore server {}: {e}", payload.endpoint))?;
-
-            let (classic_pub, pq_ct, shared_secret) =
-                HybridClientKEM::encapsulate(&payload.classic_pub, &payload.pq_pub)?;
-
-            let meta = serde_json::json!({
-                "token": payload.token,
-                "uuid": payload.user_uuid,
-                "host": target_host,
-                "port": target_port
-            });
-            let meta_bytes = serde_json::to_vec(&meta)?;
-
-            let cipher = ChaCha20Poly1305::new_from_slice(&shared_secret)?;
-            let mut nonce_bytes = [0u8; 12];
-            thread_rng().fill_bytes(&mut nonce_bytes);
-            let ciphertext = cipher
-                .encrypt(Nonce::from_slice(&nonce_bytes), meta_bytes.as_ref())
-                .map_err(|e| anyhow!("Handshake encryption error: {e}"))?;
-
-            server_stream.write_all(b"QC\x01").await?;
-            server_stream.write_all(&classic_pub).await?;
-            server_stream.write_u16(pq_ct.len() as u16).await?;
-            server_stream.write_all(&pq_ct).await?;
-            server_stream.write_all(&nonce_bytes).await?;
-            server_stream.write_u16(ciphertext.len() as u16).await?;
-            server_stream.write_all(&ciphertext).await?;
-            server_stream.flush().await?;
-
-            let status = server_stream.read_u8().await?;
-            if status != 0x00 {
-                stream.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
-                return Err(anyhow!("Server rejected connection (status {status})"));
-            }
-
-            stream.write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x2a, 0x38]).await?;
-            stream.flush().await?;
-
-            Ok::<TcpStream, anyhow::Error>(server_stream)
-        }).await.map_err(|_| anyhow!("SOCKS5 negotiation timed out"))??;
-
-        // Take ownership of stream and forward through TransportEngine
-        let client_stream = stream.try_clone()?;
-        TransportEngine::bridge_connections(client_stream, server_stream, SESSION_IDLE_TIMEOUT).await?;
+        TransportEngine::bridge_connections(stream, server_stream, SESSION_IDLE_TIMEOUT).await?;
         Ok(())
+    }
+
+    /// Negotiates SOCKS5 handshake and establishes authenticated QCore post-quantum tunnel.
+    async fn perform_handshake(stream: &mut TcpStream, payload: &ServerPayload) -> Result<TcpStream> {
+        // Step 1: Version negotiation
+        let ver = stream.read_u8().await?;
+        if ver != 0x05 {
+            return Err(anyhow!("Unsupported SOCKS version: {ver}"));
+        }
+        let nmethods = stream.read_u8().await?;
+        let mut methods = vec![0u8; nmethods as usize];
+        stream.read_exact(&mut methods).await?;
+        stream.write_all(&[0x05, 0x00]).await?;
+        stream.flush().await?;
+
+        // Step 2: Request evaluation
+        let req_ver = stream.read_u8().await?;
+        let cmd = stream.read_u8().await?;
+        let _rsv = stream.read_u8().await?;
+        let atyp = stream.read_u8().await?;
+
+        if req_ver != 0x05 || cmd != 0x01 {
+            stream.write_all(&[0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
+            return Err(anyhow!("Only SOCKS5 CONNECT command is supported"));
+        }
+
+        let target_host = match atyp {
+            0x01 => {
+                let mut ip = [0u8; 4];
+                stream.read_exact(&mut ip).await?;
+                Ipv4Addr::from(ip).to_string()
+            }
+            0x03 => {
+                let len = stream.read_u8().await?;
+                let mut domain = vec![0u8; len as usize];
+                stream.read_exact(&mut domain).await?;
+                String::from_utf8(domain)?
+            }
+            0x04 => {
+                let mut ip = [0u8; 16];
+                stream.read_exact(&mut ip).await?;
+                Ipv6Addr::from(ip).to_string()
+            }
+            _ => return Err(anyhow!("Unsupported address type: {atyp}")),
+        };
+
+        let target_port = stream.read_u16().await?;
+
+        let mut server_stream = TcpStream::connect(&payload.endpoint)
+            .await
+            .map_err(|e| anyhow!("Failed to connect to QCore server {}: {e}", payload.endpoint))?;
+
+        let (classic_pub, pq_ct, shared_secret) =
+            HybridClientKEM::encapsulate(&payload.classic_pub, &payload.pq_pub)?;
+
+        let meta = serde_json::json!({
+            "token": payload.token,
+            "uuid": payload.user_uuid,
+            "host": target_host,
+            "port": target_port
+        });
+        let meta_bytes = serde_json::to_vec(&meta)?;
+
+        let cipher = ChaCha20Poly1305::new_from_slice(&shared_secret)?;
+        let mut nonce_bytes = [0u8; 12];
+        thread_rng().fill_bytes(&mut nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce_bytes), meta_bytes.as_ref())
+            .map_err(|e| anyhow!("Handshake encryption error: {e}"))?;
+
+        server_stream.write_all(b"QC\x01").await?;
+        server_stream.write_all(&classic_pub).await?;
+        server_stream.write_u16(pq_ct.len() as u16).await?;
+        server_stream.write_all(&pq_ct).await?;
+        server_stream.write_all(&nonce_bytes).await?;
+        server_stream.write_u16(ciphertext.len() as u16).await?;
+        server_stream.write_all(&ciphertext).await?;
+        server_stream.flush().await?;
+
+        let status = server_stream.read_u8().await?;
+        if status != 0x00 {
+            stream.write_all(&[0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0]).await?;
+            return Err(anyhow!("Server rejected connection (status {status})"));
+        }
+
+        stream.write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x2a, 0x38]).await?;
+        stream.flush().await?;
+
+        Ok(server_stream)
     }
 }

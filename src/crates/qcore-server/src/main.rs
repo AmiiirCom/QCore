@@ -30,10 +30,7 @@ use user_manager::UserManager;
 use wizard::{ServerWizard, StoredServerConfig};
 use x25519_dalek::StaticSecret;
 
-/// Inactivity timeout for active sessions (3 minutes).
 const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// Handshake completion timeout (15 seconds).
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Parser)]
@@ -45,9 +42,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run initial interactive server setup wizard.
     Setup,
-    /// Manage user accounts and credentials.
     #[command(subcommand)]
     User(UserCommands),
 }
@@ -83,7 +78,7 @@ async fn main() -> Result<()> {
     }
     info!("Loaded {} user account(s) into memory.", config.users.len());
 
-    // Spawn background task for live config hot-reloading
+    // Background task for live config hot-reloading
     let watcher_user_manager = user_manager.clone();
     tokio::spawn(async move {
         let mut last_modified = std::fs::metadata("server_config.json")
@@ -138,6 +133,12 @@ async fn main() -> Result<()> {
     }
 }
 
+enum HandshakeOutcome {
+    Success(TcpStream, Arc<user_manager::UserState>),
+    Fallback,
+    Failed,
+}
+
 async fn handle_connection(
     mut socket: TcpStream,
     classic_secret: StaticSecret,
@@ -145,76 +146,97 @@ async fn handle_connection(
     user_manager: UserManager,
     fallback_domain: String,
 ) -> Result<()> {
-    // Enforce handshake completion timeout
-    let (target_stream, user_state) = tokio::time::timeout(HANDSHAKE_TIMEOUT, async {
-        let mut magic = [0u8; 3];
-        if socket.read_exact(&mut magic).await.is_err() || &magic != b"QC\x01" {
+    let outcome = tokio::time::timeout(
+        HANDSHAKE_TIMEOUT,
+        evaluate_handshake(&mut socket, &classic_secret, &pq_decaps_key, &user_manager),
+    )
+    .await;
+
+    match outcome {
+        Ok(Ok(HandshakeOutcome::Success(target_stream, user_state))) => {
+            let (tx, rx) = TransportEngine::bridge_connections(socket, target_stream, SESSION_IDLE_TIMEOUT).await?;
+            UserManager::record_traffic(&user_state, tx + rx);
+            info!(
+                "Session closed for user '{}' (tx: {} bytes, rx: {} bytes)",
+                user_state.config.name, tx, rx
+            );
+            Ok(())
+        }
+        Ok(Ok(HandshakeOutcome::Fallback)) | Err(_) => {
             if let Ok(fallback) = TcpStream::connect(format!("{}:443", fallback_domain)).await {
                 let _ = TransportEngine::bridge_connections(socket, fallback, SESSION_IDLE_TIMEOUT).await;
             }
-            return Err(anyhow!("Fallback redirection"));
+            Ok(())
         }
+        _ => Ok(()),
+    }
+}
 
-        let mut client_classic = [0u8; 32];
-        socket.read_exact(&mut client_classic).await?;
+async fn evaluate_handshake(
+    socket: &mut TcpStream,
+    classic_secret: &StaticSecret,
+    pq_decaps_key: &Arc<DecapsulationKey<MlKem768Params>>,
+    user_manager: &UserManager,
+) -> Result<HandshakeOutcome> {
+    let mut magic = [0u8; 3];
+    if socket.read_exact(&mut magic).await.is_err() || &magic != b"QC\x01" {
+        return Ok(HandshakeOutcome::Fallback);
+    }
 
-        let pq_len = socket.read_u16().await? as usize;
-        let mut pq_ct = vec![0u8; pq_len];
-        socket.read_exact(&mut pq_ct).await?;
+    let mut client_classic = [0u8; 32];
+    socket.read_exact(&mut client_classic).await?;
 
-        let shared_secret = HybridServerKEM::decapsulate(
-            &classic_secret,
-            &pq_decaps_key,
-            &client_classic,
-            &pq_ct,
-        )?;
+    let pq_len = socket.read_u16().await? as usize;
+    let mut pq_ct = vec![0u8; pq_len];
+    socket.read_exact(&mut pq_ct).await?;
 
-        let mut nonce_bytes = [0u8; 12];
-        socket.read_exact(&mut nonce_bytes).await?;
-        let cipher_len = socket.read_u16().await? as usize;
-        let mut ciphertext = vec![0u8; cipher_len];
-        socket.read_exact(&mut ciphertext).await?;
+    let shared_secret = match HybridServerKEM::decapsulate(
+        classic_secret,
+        pq_decaps_key,
+        &client_classic,
+        &pq_ct,
+    ) {
+        Ok(ss) => ss,
+        Err(_) => return Ok(HandshakeOutcome::Fallback),
+    };
 
-        let cipher = ChaCha20Poly1305::new_from_slice(&shared_secret)?;
-        let decrypted = cipher
-            .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
-            .map_err(|_| anyhow!("Failed to decrypt handshake metadata"))?;
+    let mut nonce_bytes = [0u8; 12];
+    socket.read_exact(&mut nonce_bytes).await?;
+    let cipher_len = socket.read_u16().await? as usize;
+    let mut ciphertext = vec![0u8; cipher_len];
+    socket.read_exact(&mut ciphertext).await?;
 
-        let meta: serde_json::Value = serde_json::from_slice(&decrypted)?;
-        let token = meta["token"].as_str().unwrap_or("");
-        let uuid = meta["uuid"].as_str().unwrap_or("");
-        let host = meta["host"].as_str().unwrap_or("");
-        let port = meta["port"].as_u64().unwrap_or(0) as u16;
+    let cipher = ChaCha20Poly1305::new_from_slice(&shared_secret)?;
+    let decrypted = match cipher.decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref()) {
+        Ok(d) => d,
+        Err(_) => return Ok(HandshakeOutcome::Fallback),
+    };
 
-        let user_state = match user_manager.authenticate(uuid, token).await {
-            Some(u) => u,
-            None => {
-                socket.write_u8(0x01).await?;
-                return Err(anyhow!("Unauthorized or expired user"));
-            }
-        };
+    let meta: serde_json::Value = serde_json::from_slice(&decrypted)?;
+    let token = meta["token"].as_str().unwrap_or("");
+    let uuid = meta["uuid"].as_str().unwrap_or("");
+    let host = meta["host"].as_str().unwrap_or("");
+    let port = meta["port"].as_u64().unwrap_or(0) as u16;
 
-        let target_addr = format!("{}:{}", host, port);
-        let target_stream = match TcpStream::connect(&target_addr).await {
-            Ok(s) => s,
-            Err(_) => {
-                let _ = socket.write_u8(0x02).await;
-                return Err(anyhow!("Target unreachable"));
-            }
-        };
+    let user_state = match user_manager.authenticate(uuid, token).await {
+        Some(u) => u,
+        None => {
+            let _ = socket.write_u8(0x01).await;
+            return Ok(HandshakeOutcome::Failed);
+        }
+    };
 
-        socket.write_u8(0x00).await?;
-        socket.flush().await?;
+    let target_addr = format!("{}:{}", host, port);
+    let target_stream = match TcpStream::connect(&target_addr).await {
+        Ok(s) => s,
+        Err(_) => {
+            let _ = socket.write_u8(0x02).await;
+            return Ok(HandshakeOutcome::Failed);
+        }
+    };
 
-        Ok::<(TcpStream, Arc<user_manager::UserState>), anyhow::Error>((target_stream, user_state))
-    }).await.map_err(|_| anyhow!("Handshake negotiation timed out"))??;
+    socket.write_u8(0x00).await?;
+    socket.flush().await?;
 
-    // Full-duplex forwarding with idle timeout protection
-    let (tx, rx) = TransportEngine::bridge_connections(socket, target_stream, SESSION_IDLE_TIMEOUT).await?;
-    UserManager::record_traffic(&user_state, tx + rx);
-    info!(
-        "Session closed for user '{}' (tx: {} bytes, rx: {} bytes)",
-        user_state.config.name, tx, rx
-    );
-    Ok(())
+    Ok(HandshakeOutcome::Success(target_stream, user_state))
 }
