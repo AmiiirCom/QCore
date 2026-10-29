@@ -9,38 +9,41 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
-edition = "2024"
+version = "0.1.6"
+edition = "2021"
 authors = ["QCore Core Development Team"]
 license = "MIT OR Apache-2.0"
 
-
-
 [workspace.dependencies]
-# جدیدترین نسخه‌های تاییدشده در اکوسیستم Rust
+# Asynchronous runtime and low-level networking
 tokio = { version = "1.54", features = ["full"] }
-x25519-dalek = { version = "3.0", features = ["static_secrets"] }
-blake3 = "1.8"
-ml-kem = "0.2"
-chacha20poly1305 = "0.10"
-bytes = "1.10"
 socket2 = "0.5"
-clap = { version = "4.5", features = ["derive"] }
+bytes = "1.10"
+
+# Cryptographic primitives (Post-Quantum & Classical)
+x25519-dalek = { version = "3.0", features = ["static_secrets"] }
+ml-kem = "0.2"
+blake3 = "1.8"
+chacha20poly1305 = "0.10"
+rand = "0.8"
+
+# Serialization and configuration management
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
-uuid = { version = "1.12", features = ["v4", "serde"] }
 base64 = "0.22"
-anyhow = "1.0"
-thiserror = "2.0"
+uuid = { version = "1.12", features = ["v4", "serde"] }
+
+# Command-line interface and diagnostic logging
+clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-rand = "0.8"
-
+anyhow = "1.0"
+thiserror = "2.0"
 
 [profile.release]
-opt-level = 3           # بالاترین سطح بهینه‌سازی سرعت
-lto = true              # فعال‌سازی Link Time Optimization در تمام کریت‌ها
-codegen-units = 1       # بهینه‌سازی یکپارچه برای کاهش باینری
-panic = "abort"         # حذف سربار پشته unwinding در زمان بروز خطای فاحش
-strip = true            # حذف کامل نمادهای دیباگ (Debug Symbols) جهت کاهش شدید حجم
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,16 +1,23 @@
+//! Client Interactive Setup Wizard.
+//!
+//! Decrypts incoming `qcore://` subscription share links and persists
+//! connection configurations into `client_config.json`.
+
 use anyhow::{anyhow, Result};
 use qcore_crypto::share_link::{SecureLinkEngine, ServerPayload};
 use std::io::{self, Write};
 
+/// Wizard driver for client profile import.
 pub struct ClientWizard;
 
 impl ClientWizard {
+    /// Prompts user for link and decryption credentials.
     pub fn run_interactive() -> Result<ServerPayload> {
         println!("============================================================");
-        println!("       QCore Client Setup - Import Encrypted Subscription    ");
+        println!("       QCore Client - Import Subscription Link              ");
         println!("============================================================");
 
-        print!("[?] Paste your encrypted share link (qcore://...): ");
+        print!("[?] Paste encrypted share link (qcore://...): ");
         io::stdout().flush()?;
         let mut link_input = String::new();
         io::stdin().read_line(&mut link_input)?;
@@ -25,19 +32,18 @@ impl ClientWizard {
 
             println!("\n[*] Decrypting configuration payload...");
             let payload = SecureLinkEngine::import_symmetric(link, password)?;
-            
-            // ذخیره خودکار کانفیگ برای اجراهای بعدی
+
             std::fs::write("client_config.json", serde_json::to_string_pretty(&payload)?)?;
-            
+
             println!("[\x1b[32m+\x1b[0m] Decryption successful & saved to client_config.json!");
-            println!("Target Server: {}", payload.endpoint);
-            println!("Impersonated Domain (SNI): {}", payload.sni);
-            println!("Quantum Transport: {}", payload.transport);
+            println!("Endpoint  : {}", payload.endpoint);
+            println!("SNI Target: {}", payload.sni);
+            println!("Transport : {}", payload.transport);
             return Ok(payload);
         } else if link.starts_with("qcore://asym.") {
-            return Err(anyhow!("Asymmetric link requires private key file import."));
+            return Err(anyhow!("Asymmetric links require private key file import"));
         }
 
-        Err(anyhow!("Invalid link format."))
+        Err(anyhow!("Unrecognized link format"))
     }
 }

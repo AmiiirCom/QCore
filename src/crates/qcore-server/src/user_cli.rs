@@ -1,3 +1,8 @@
+//! Command-Line User Provisioning Interface.
+//!
+//! Implements subcommands for adding users, listing quotas, generating share
+//! links, and removing revoked credentials.
+
 use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -10,42 +15,48 @@ use uuid::Uuid;
 use crate::user_manager::UserConfig;
 use crate::wizard::StoredServerConfig;
 
+/// User management CLI subcommands.
 #[derive(Subcommand)]
 pub enum UserCommands {
-    /// افزودن کاربر جدید همراه با سهمیه حجم و زمان و صدور لینک
+    /// Provision a new user account and output an encrypted share link.
     Add {
-        /// نام کاربر
+        /// Unique username.
         name: String,
-        /// سهمیه حجم به گیگابایت (0 = نامحدود)
+        /// Bandwidth limit in gigabytes (0 = unlimited).
         #[arg(short, long, default_value = "0")]
         quota_gb: u64,
-        /// مدت اعتبار به روز (0 = نامحدود)
+        /// Validity period in days (0 = unlimited).
         #[arg(short, long, default_value = "0")]
         days: u64,
-        /// رمز عبور لینک اشتراک (در صورت خالی بودن پرسیده می‌شود)
+        /// Password to encrypt the share link.
         #[arg(short, long)]
         password: Option<String>,
     },
-    /// نمایش لیست کاربران سرور، سهمیه و وضعیت
+    /// List all registered users and their quota status.
     List,
-    /// حذف یک کاربر بر اساس نام یا UUID
+    /// Remove an existing user by name or UUID.
     Remove {
+        /// Target username or UUID.
         id_or_name: String,
     },
-    /// صدور مجدد لینک اشتراک رمزشده برای کاربر موجود
+    /// Regenerate an encrypted share link for an existing user.
     Link {
+        /// Target username or UUID.
         id_or_name: String,
+        /// Password for link encryption.
         #[arg(short, long)]
         password: Option<String>,
     },
 }
 
+/// Handler executing user management actions.
 pub struct UserCliHandler;
 
 impl UserCliHandler {
+    /// Dispatches execution based on the chosen subcommand.
     pub fn handle(cmd: UserCommands) -> Result<()> {
         let config_data = std::fs::read_to_string("server_config.json")
-            .map_err(|_| anyhow!("ابتدا باید سرور را با دستور 'qcore-server setup' راه‌اندازی کنید."))?;
+            .map_err(|_| anyhow!("Server configuration not found. Run 'qcore-server setup' first."))?;
         let mut config: StoredServerConfig = serde_json::from_str(&config_data)?;
 
         match cmd {
@@ -83,7 +94,7 @@ impl UserCliHandler {
         let pass = match password {
             Some(p) => p,
             None => {
-                print!("[?] رمز عبور برای لینک رمزشده کاربر '{}' را وارد کنید: ", name);
+                print!("[?] Enter password to encrypt share link for user '{}': ", name);
                 io::stdout().flush()?;
                 let mut p = String::new();
                 io::stdin().read_line(&mut p)?;
@@ -103,9 +114,8 @@ impl UserCliHandler {
         config.users.push(new_user);
         std::fs::write("server_config.json", serde_json::to_string_pretty(config)?)?;
 
-        // ساخت لینک اختصاصی کاربر
         let classic_pub_bytes: [u8; 32] = STANDARD.decode(&config.classic_public_b64)?
-            .try_into().map_err(|_| anyhow!("Invalid classic public key"))?;
+            .try_into().map_err(|_| anyhow!("Invalid classic public key stored"))?;
         let pq_pub = STANDARD.decode(&config.pq_public_b64)?;
 
         let payload = ServerPayload {
@@ -121,29 +131,29 @@ impl UserCliHandler {
         let link = SecureLinkEngine::export_symmetric(&payload, &pass)?;
 
         println!("\n============================================================");
-        println!("             کاربر با موفقیت اضافه شد                      ");
+        println!("             User Provisioned Successfully                  ");
         println!("============================================================");
-        println!("نام کاربر  : {}", name);
-        println!("سهمیه حجم : {}", if quota_gb > 0 { format!("{} گیگابایت", quota_gb) } else { "نامحدود".into() });
-        println!("اعتبار    : {}", if days > 0 { format!("{} روز", days) } else { "نامحدود".into() });
-        println!("\nلینک اشتراک رمزشده کاربر:");
+        println!("Username : {}", name);
+        println!("Quota    : {}", if quota_gb > 0 { format!("{} GB", quota_gb) } else { "Unlimited".into() });
+        println!("Validity : {}", if days > 0 { format!("{} days", days) } else { "Indefinite".into() });
+        println!("\nEncrypted Share Link:");
         println!("\x1b[36m{}\x1b[0m", link);
-        println!("(این لینک را به همراه رمزی که وارد کردید به کاربر تحویل دهید)");
+        println!("(Distribute this link alongside the chosen password to the client)");
         println!("============================================================\n");
 
         Ok(())
     }
 
     fn list_users(config: &StoredServerConfig) {
-        println!("\n{:<20} {:<38} {:<15} {:<10}", "نام کاربر", "شناسه UUID", "سهمیه حجم", "وضعیت");
+        println!("\n{:<20} {:<38} {:<15} {:<10}", "Username", "UUID", "Quota", "Status");
         println!("{:-<88}", "");
         for u in &config.users {
             let quota = if u.quota_bytes > 0 {
                 format!("{:.1} GB", u.quota_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
             } else {
-                "نامحدود".to_string()
+                "Unlimited".to_string()
             };
-            let status = if u.enabled { "فعال" } else { "مسدود" };
+            let status = if u.enabled { "Active" } else { "Revoked" };
             println!("{:<20} {:<38} {:<15} {:<10}", u.name, u.uuid, quota, status);
         }
         println!("{:-<88}\n", "");
@@ -155,21 +165,21 @@ impl UserCliHandler {
 
         if config.users.len() < initial_len {
             std::fs::write("server_config.json", serde_json::to_string_pretty(config)?)?;
-            println!("[\x1b[32m+\x1b[0m] کاربر '{}' با موفقیت حذف شد.", id_or_name);
+            println!("[\x1b[32m+\x1b[0m] User '{}' removed successfully.", id_or_name);
         } else {
-            println!("[\x1b[31mx\x1b[0m] کاربری با این مشخصات یافت نشد.");
+            println!("[\x1b[31mx\x1b[0m] User not found.");
         }
         Ok(())
     }
 
     fn generate_link(config: &StoredServerConfig, id_or_name: &str, password: Option<String>) -> Result<()> {
         let user = config.users.iter().find(|u| u.name == id_or_name || u.uuid == id_or_name)
-            .ok_or_else(|| anyhow!("کاربر مورد نظر یافت نشد."))?;
+            .ok_or_else(|| anyhow!("User not found."))?;
 
         let pass = match password {
             Some(p) => p,
             None => {
-                print!("[?] رمز عبور برای لینک کاربر '{}': ", user.name);
+                print!("[?] Enter password to encrypt share link for user '{}': ", user.name);
                 io::stdout().flush()?;
                 let mut p = String::new();
                 io::stdin().read_line(&mut p)?;
@@ -178,7 +188,7 @@ impl UserCliHandler {
         };
 
         let classic_pub_bytes: [u8; 32] = STANDARD.decode(&config.classic_public_b64)?
-            .try_into().map_err(|_| anyhow!("Invalid classic public key"))?;
+            .try_into().map_err(|_| anyhow!("Invalid classic public key stored"))?;
         let pq_pub = STANDARD.decode(&config.pq_public_b64)?;
 
         let payload = ServerPayload {
@@ -192,7 +202,7 @@ impl UserCliHandler {
         };
 
         let link = SecureLinkEngine::export_symmetric(&payload, &pass)?;
-        println!("\nلینک اشتراک جدید برای {}:", user.name);
+        println!("\nGenerated Share Link for {}:", user.name);
         println!("\x1b[36m{}\x1b[0m\n", link);
         Ok(())
     }

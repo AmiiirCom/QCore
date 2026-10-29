@@ -1,3 +1,8 @@
+//! Server Interactive Setup Wizard.
+//!
+//! Guides server administrators through network interface configuration,
+//! cryptographic keypair generation, and initial profile creation.
+
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -10,50 +15,61 @@ use uuid::Uuid;
 
 use crate::user_manager::UserConfig;
 
+/// Persistent server configuration stored in JSON format.
 #[derive(Serialize, Deserialize, Clone)]
 pub struct StoredServerConfig {
+    /// TCP listening port.
     pub port: u16,
+    /// SNI domain for camouflage fallback.
     pub sni: String,
+    /// Public IP address or domain of the host.
     pub server_ip: String,
+    /// Base64-encoded classical X25519 secret key.
     pub classic_secret_b64: String,
+    /// Base64-encoded classical X25519 public key.
     pub classic_public_b64: String,
+    /// Base64-encoded post-quantum decapsulation key.
     pub pq_decaps_key_b64: String,
+    /// Base64-encoded post-quantum public encapsulation key.
     pub pq_public_b64: String,
+    /// Registered user credentials.
     pub users: Vec<UserConfig>,
 }
 
+/// Wizard driver for initial server bootstrap.
 pub struct ServerWizard;
 
 impl ServerWizard {
+    /// Launches the interactive command-line setup wizard.
     pub fn run_interactive() -> Result<()> {
         println!("============================================================");
-        println!("       QCore Enterprise Server - Interactive Setup Wizard   ");
+        println!("            QCore Server - Setup Wizard                     ");
         println!("============================================================");
 
         let stdin = io::stdin();
 
-        print!("[?] Enter listening port [Default 8443]: ");
+        print!("[?] Enter listening port [Default: 8443]: ");
         io::stdout().flush()?;
         let mut port_input = String::new();
         stdin.read_line(&mut port_input)?;
         let port_str = port_input.trim();
         let port: u16 = if port_str.is_empty() { 8443 } else { port_str.parse().unwrap_or(8443) };
 
-        print!("[?] Enter SNI/Fallback Target Domain [Default: swdist.apple.com]: ");
+        print!("[?] Enter fallback SNI target domain [Default: swdist.apple.com]: ");
         io::stdout().flush()?;
         let mut sni_input = String::new();
         stdin.read_line(&mut sni_input)?;
         let sni = sni_input.trim();
         let sni = if sni.is_empty() { "swdist.apple.com" } else { sni };
 
-        print!("[?] Enter your Server Public IP / Domain [e.g. 127.0.0.1]: ");
+        print!("[?] Enter server public IP or hostname [Default: 127.0.0.1]: ");
         io::stdout().flush()?;
         let mut ip_input = String::new();
         stdin.read_line(&mut ip_input)?;
         let server_ip = ip_input.trim();
         let server_ip = if server_ip.is_empty() { "127.0.0.1" } else { server_ip };
 
-        println!("\n[*] در حال تولید کلیدهای پسا-کوانتوم NIST FIPS 203 ML-KEM-768 + X25519...");
+        println!("\n[*] Generating NIST FIPS 203 ML-KEM-768 + X25519 hybrid keys...");
         let keypair = HybridKeyPair::generate();
         let admin_uuid = Uuid::new_v4().to_string();
         let admin_token = Uuid::new_v4().to_string();
@@ -79,7 +95,7 @@ impl ServerWizard {
         };
         std::fs::write("server_config.json", serde_json::to_string_pretty(&stored)?)?;
 
-        print!("[?] یک رمز عبور برای لینک اشتراک کاربر اولیه (admin) وارد کنید: ");
+        print!("[?] Enter password to encrypt the admin share link: ");
         io::stdout().flush()?;
         let mut pass_input = String::new();
         stdin.read_line(&mut pass_input)?;
@@ -98,12 +114,12 @@ impl ServerWizard {
         let sym_link = SecureLinkEngine::export_symmetric(&payload, password)?;
 
         println!("\n------------------------------------------------------------");
-        println!("             تنظیمات ذخیره شد و سرور آماده است              ");
+        println!("             Configuration Saved Successfully               ");
         println!("------------------------------------------------------------");
-        println!("فایل تنظیمات: server_config.json");
-        println!("\nلینک رمزشده کاربر ادمین:");
+        println!("Config file: server_config.json");
+        println!("\nAdministrative Share Link:");
         println!("\x1b[36m{}\x1b[0m", sym_link);
-        println!("\nنکته: اکنون می‌توانید با دستور زیر در هر زمان کاربر جدید اضافه کنید:");
+        println!("\nNote: Additional users can be provisioned at any time via:");
         println!("  qcore-server user add <NAME> --quota-gb <GB> --days <DAYS>");
         println!("------------------------------------------------------------\n");
 

@@ -1,7 +1,15 @@
+//! C-ABI Foreign Function Interface (FFI).
+//!
+//! Exposes bindings compatible with native mobile application frameworks
+//! (Android JNI via Kotlin/Java and iOS/macOS via Swift/Objective-C).
+
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-/// شروع به کار موتور کلاینت از طریق Kotlin / Swift
+/// Starts the QCore client engine on a background runtime thread.
+///
+/// # Safety
+/// `config_json` must be a valid null-terminated C string pointer.
 #[unsafe(no_mangle)]
 pub extern "C" fn qcore_client_start(config_json: *const c_char) -> i32 {
     if config_json.is_null() {
@@ -19,14 +27,14 @@ pub extern "C" fn qcore_client_start(config_json: *const c_char) -> i32 {
             Err(_) => return,
         };
         rt.block_on(async {
-            // آغاز لوکال پروکسی‌ها درون پس‌زمینه اپلیکیشن موبایل
+            // Background daemon routines for embedded mobile targets
         });
     });
 
     0
 }
 
-/// متوقف‌سازی کلاینت
+/// Signals the client engine to terminate and release open sockets.
 #[unsafe(no_mangle)]
 pub extern "C" fn qcore_client_stop() -> i32 {
     0

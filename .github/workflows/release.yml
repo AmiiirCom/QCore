@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   # ==========================================================
-  # جاب اول: بیلد و تفکیک باینری‌های سرور و کلاینت
+  # Job 1: Build and package server and client binaries
   # ==========================================================
   build:
     name: Build - ${{ matrix.arch_name }}
@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- لینوکس مدرن (دبیان، اوبونتو، آرچ، سنت‌او‌اس و...) ---
+          # --- Linux (Debian, Arch, Ubuntu, CentOS, etc.) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             arch_name: linux-x86_64-musl
@@ -41,7 +41,7 @@ jobs:
             deb_arch: arm64
             pacman_arch: aarch64
 
-          # --- روترهای میکروتیک (MikroTik RouterOS v7) ---
+          # --- MikroTik RouterOS v7 Targets ---
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             arch_name: mikrotik-routeros-arm64
@@ -56,7 +56,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- سیستم‌عامل FreeBSD ---
+          # --- FreeBSD ---
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             arch_name: freebsd-x86_64
@@ -64,7 +64,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- ویندوز ۱۰ و ۱۱ (AMD64 و ARM64) ---
+          # --- Windows 10 & 11 (x86_64 and ARM64) ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             arch_name: windows-x86_64-win10-11
@@ -79,7 +79,7 @@ jobs:
             is_windows: true
             package_deb_arch: false
 
-          # --- مکینتاش مدرن (macOS 13+) ---
+          # --- Modern macOS (13+ Ventura, Sonoma, Sequoia) ---
           - os: macos-latest
             target: aarch64-apple-darwin
             arch_name: macos-arm64-modern
@@ -103,7 +103,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Set macOS Deployment Target (Latest Versions)
+      - name: Set macOS Deployment Target
         if: startsWith(matrix.os, 'macos')
         run: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> $GITHUB_ENV
 
@@ -122,7 +122,7 @@ jobs:
         run: |
           cross build --release --target ${{ matrix.target }}
 
-      # بسته‌بندی مجزا برای ویندوز (تولید ۲ فایل Zip جدا برای سرور و کلاینت)
+      # Package Windows binaries into separate server and client archives
       - name: Package Windows Binaries (Separated)
         if: matrix.is_windows
         shell: pwsh
@@ -130,7 +130,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path artifacts
 
-          # ۱. بسته مجزای سرور ویندوز
           $serverName = "qcore-server-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $serverName
           Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$serverName/"
@@ -139,7 +138,6 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${serverName}.zip" | ForEach-Object { "$($_.Hash)  ${serverName}.zip" } | Out-File -Encoding ascii "${serverName}.zip.sha256"
           cd ..
 
-          # ۲. بسته مجزای کلاینت ویندوز
           $clientName = "qcore-client-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $clientName
           Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$clientName/"
@@ -148,7 +146,7 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${clientName}.zip" | ForEach-Object { "$($_.Hash)  ${clientName}.zip" } | Out-File -Encoding ascii "${clientName}.zip.sha256"
           cd ..
 
-      # بسته‌بندی مجزا برای لینوکس، مک، FreeBSD و میکروتیک (.tar.gz جداگانه)
+      # Package Unix binaries (.tar.gz)
       - name: Package Unix Binaries (Separated)
         if: "!matrix.is_windows"
         shell: bash
@@ -156,7 +154,6 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p artifacts
 
-          # ۱. بسته مجزای سرور لینوکس/یونیکس
           SERVER_NAME="qcore-server-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${SERVER_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-server" "${SERVER_NAME}/"
@@ -165,7 +162,6 @@ jobs:
           shasum -a 256 "${SERVER_NAME}.tar.gz" > "${SERVER_NAME}.tar.gz.sha256"
           cd ..
 
-          # ۲. بسته مجزای کلاینت لینوکس/یونیکس
           CLIENT_NAME="qcore-client-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${CLIENT_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-client" "${CLIENT_NAME}/"
@@ -174,7 +170,7 @@ jobs:
           shasum -a 256 "${CLIENT_NAME}.tar.gz" > "${CLIENT_NAME}.tar.gz.sha256"
           cd ..
 
-      # ساخت پکیج‌های رسمی نصبی دبیان (.deb) و آرچ (.pkg.tar.zst) به صورت مجزا
+      # Build native package formats (.deb and .pkg.tar.zst)
       - name: Build Debian (.deb) and Arch (.pkg.tar.zst) Packages (Separated)
         if: matrix.package_deb_arch
         shell: bash
@@ -182,7 +178,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           CLEAN_VER="${TAG#v}"
 
-          # --- ۱. پکیج دبیان مجزای سرور (شامل سرویس Systemd) ---
+          # Server Debian Package
           DEB_SERVER="deb_server"
           mkdir -p "${DEB_SERVER}/DEBIAN" "${DEB_SERVER}/usr/local/bin" "${DEB_SERVER}/etc/systemd/system" "${DEB_SERVER}/etc/qcore"
           cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_SERVER}/usr/local/bin/"
@@ -211,7 +207,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: ${{ matrix.deb_arch }}
-          Maintainer: QCore Team
+          Maintainer: QCore Development Team
           Description: QCore High-Stealth Anti-Censorship Server Daemon
           EOF
 
@@ -227,7 +223,7 @@ jobs:
           shasum -a 256 "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
           cd ..
 
-          # --- ۲. پکیج دبیان مجزای کلاینت ---
+          # Client Debian Package
           DEB_CLIENT="deb_client"
           mkdir -p "${DEB_CLIENT}/DEBIAN" "${DEB_CLIENT}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-client" "${DEB_CLIENT}/usr/local/bin/"
@@ -239,7 +235,7 @@ jobs:
           Section: net
           Priority: optional
           Architecture: ${{ matrix.deb_arch }}
-          Maintainer: QCore Team
+          Maintainer: QCore Development Team
           Description: QCore Cross-Platform Client & Local Inbounds
           EOF
 
@@ -248,7 +244,7 @@ jobs:
           shasum -a 256 "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
           cd ..
 
-          # --- ۳. پکیج آرچ لینوکس مجزای سرور ---
+          # Server Arch Linux Package
           ARCH_SERVER="arch_server"
           mkdir -p "${ARCH_SERVER}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_SERVER}/usr/local/bin/"
@@ -259,7 +255,7 @@ jobs:
           pkgdesc = QCore High-Stealth Anti-Censorship Server Daemon
           url = https://github.com/${{ github.repository }}
           builddate = $(date +%s)
-          packager = QCore Team
+          packager = QCore Development Team
           size = $(du -sb "${ARCH_SERVER}/usr" | awk '{print $1}')
           arch = ${{ matrix.pacman_arch }}
           license = MIT
@@ -272,7 +268,7 @@ jobs:
           shasum -a 256 "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
           cd ..
 
-          # --- ۴. پکیج آرچ لینوکس مجزای کلاینت ---
+          # Client Arch Linux Package
           ARCH_CLIENT="arch_client"
           mkdir -p "${ARCH_CLIENT}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_CLIENT}/usr/local/bin/"
@@ -283,7 +279,7 @@ jobs:
           pkgdesc = QCore Cross-Platform Client & Local Inbounds
           url = https://github.com/${{ github.repository }}
           builddate = $(date +%s)
-          packager = QCore Team
+          packager = QCore Development Team
           size = $(du -sb "${ARCH_CLIENT}/usr" | awk '{print $1}')
           arch = ${{ matrix.pacman_arch }}
           license = MIT
@@ -304,7 +300,7 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================
-  # جاب دوم: بیلد کلاینت اندروید (JNI .so و باینری CLI ترموکس)
+  # Job 2: Build Android client components (JNI Libs & CLI)
   # ==========================================================
   build-android:
     name: Build - Android Client
@@ -331,10 +327,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p artifacts jniLibs/arm64-v8a jniLibs/armeabi-v7a termux-bin
 
-          # ۱. کتابخانه JNI مخصوص اپلیکیشن‌های اندروید
           cargo ndk -t arm64-v8a -t armeabi-v7a -o ./jniLibs build --release -p qcore-client --lib
-
-          # ۲. باینری اجرایی کلاینت برای ترموکس
           cargo ndk -t arm64-v8a build --release --bin qcore-client
           cp target/aarch64-linux-android/release/qcore-client termux-bin/qcore-client-arm64
 
@@ -354,14 +347,14 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================
-  # جاب سوم: انتشار منظم و دسته‌بندی‌شده در صفحه Releases
+  # Job 3: Collate and publish release assets
   # ==========================================================
   release:
     name: Publish Release
     needs: [build, build-android]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code with Full Git History
+      - name: Checkout Code with History
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -379,10 +372,10 @@ jobs:
           PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
           if [ -n "$PREV_TAG" ]; then
             export RANGE="${PREV_TAG}..${{ github.ref_name }}"
-            HEADER="## 📋 تغییرات نگارش ${{ github.ref_name }} (نسبت به $PREV_TAG):"
+            HEADER="## Release Notes for ${{ github.ref_name }} (Changes since $PREV_TAG):"
           else
             export RANGE="${{ github.ref_name }}"
-            HEADER="## 📋 تمامی تغییرات در نگارش ${{ github.ref_name }}:"
+            HEADER="## Release Notes for ${{ github.ref_name }}:"
           fi
 
           echo "$HEADER" > RELEASE_NOTES.md

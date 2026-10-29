@@ -1,3 +1,8 @@
+//! QCore Client Executable Entrypoint.
+//!
+//! Runs local RFC 1928 SOCKS5 and RFC 9110 HTTP CONNECT proxy listeners,
+//! routing application streams across encrypted quantum-resistant tunnels.
+
 mod ffi;
 mod inbound;
 mod wizard;
@@ -12,21 +17,26 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use wizard::ClientWizard;
 
+/// Command-line argument structure for the client executable.
 #[derive(Parser)]
-#[command(name = "qcore-client")]
+#[command(name = "qcore-client", about = "QCore Cross-Platform Client & Local Inbounds")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
+    /// Listening address for SOCKS5 proxy inbound.
     #[arg(short, long, default_value = "127.0.0.1:10808")]
     socks_addr: String,
 
+    /// Listening address for HTTP proxy inbound.
     #[arg(long, default_value = "127.0.0.1:10809")]
     http_addr: String,
 }
 
+/// Client subcommands.
 #[derive(Subcommand)]
 enum Commands {
+    /// Run interactive setup wizard to import a share link.
     Setup,
 }
 
@@ -42,18 +52,18 @@ async fn main() -> Result<()> {
     if let Some(Commands::Setup) = cli.command {
         match ClientWizard::run_interactive() {
             Ok(payload) => {
-                info!("کلاینت با موفقیت برای سرور {} پیکربندی شد.", payload.endpoint);
+                info!("Client configured successfully for endpoint: {}", payload.endpoint);
                 return Ok(());
             }
             Err(e) => {
-                println!("[\x1b[31mx\x1b[0m] خطا: {}", e);
+                println!("[\x1b[31mx\x1b[0m] Error: {}", e);
                 return Ok(());
             }
         }
     }
 
     let config_data = std::fs::read_to_string("client_config.json").map_err(|_| {
-        anyhow!("فایل کانفیگ یافت نشد. لطفاً ابتدا دستور 'qcore-client setup' را اجرا کنید!")
+        anyhow!("Configuration file not found. Run 'qcore-client setup' first.")
     })?;
     let payload: ServerPayload = serde_json::from_str(&config_data)?;
     let shared_payload = Arc::new(payload);
@@ -64,20 +74,20 @@ async fn main() -> Result<()> {
     let socks_payload = shared_payload.clone();
     let socks_handle = tokio::spawn(async move {
         if let Err(e) = Socks5Server::run(&socks_addr, socks_payload).await {
-            tracing::error!("خطا در اینباند SOCKS5: {}", e);
+            tracing::error!("SOCKS5 server error: {}", e);
         }
     });
 
     let http_payload = shared_payload.clone();
     let http_handle = tokio::spawn(async move {
         if let Err(e) = HttpProxyServer::run(&http_addr, http_payload).await {
-            tracing::error!("خطا در اینباند HTTP: {}", e);
+            tracing::error!("HTTP proxy server error: {}", e);
         }
     });
 
-    info!("کلاینت QCore آماده به کار است.");
-    info!("اینباند SOCKS5 فعال روی: {}", cli.socks_addr);
-    info!("اینباند HTTP Proxy فعال روی: {}", cli.http_addr);
+    info!("QCore Client is operational.");
+    info!("SOCKS5 Inbound active on {}", cli.socks_addr);
+    info!("HTTP Proxy Inbound active on {}", cli.http_addr);
 
     let _ = tokio::try_join!(socks_handle, http_handle);
     Ok(())
