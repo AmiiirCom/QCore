@@ -10,9 +10,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 #[cfg(unix)]
+#[allow(unused_imports)]
 use std::os::unix::io::AsRawFd;
 
 #[cfg(windows)]
+#[allow(unused_imports)]
 use std::os::windows::io::AsRawSocket;
 
 #[cfg(target_os = "linux")]
@@ -30,12 +32,6 @@ impl TransportEngine {
         let mut keepalive = TcpKeepalive::new();
         keepalive = keepalive.with_time(Duration::from_secs(60));
         keepalive = keepalive.with_interval(Duration::from_secs(10));
-
-        // TCP keep-alive probe retries (supported on Linux, Android, macOS)
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
-        {
-            keepalive = keepalive.with_retries(3);
-        }
 
         let _ = sock_ref.set_tcp_keepalive(&keepalive);
         Ok(())
