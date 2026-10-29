@@ -1,13 +1,19 @@
 //! Transport Layer Bridging, Socket Keep-Alive & Evasion Routines.
 //!
-//! Provides bidirectional zero-overhead stream proxying with socket-level keep-alive,
-//! idle timeout protection, and userspace TCP segmentation to prevent connection hangs.
+//! Provides cross-platform socket keep-alive, idle timeout handling,
+//! and bidirectional data forwarding across all supported operating systems.
 
 use anyhow::{anyhow, Result};
 use socket2::{SockRef, TcpKeepalive};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
+
+#[cfg(windows)]
+use std::os::windows::io::AsRawSocket;
 
 #[cfg(target_os = "linux")]
 use tracing::debug;
@@ -16,7 +22,7 @@ use tracing::debug;
 pub struct TransportEngine;
 
 impl TransportEngine {
-    /// Configures OS-level socket keep-alive probes and disables Nagle's algorithm.
+    /// Configures OS-level socket keep-alive probes and disables Nagle's algorithm across platforms.
     pub fn configure_socket(stream: &TcpStream) -> Result<()> {
         stream.set_nodelay(true)?;
 
@@ -25,7 +31,8 @@ impl TransportEngine {
         keepalive = keepalive.with_time(Duration::from_secs(60));
         keepalive = keepalive.with_interval(Duration::from_secs(10));
 
-        #[cfg(not(target_os = "windows"))]
+        // TCP keep-alive probe retries (supported on Linux, Android, macOS)
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
         {
             keepalive = keepalive.with_retries(3);
         }
@@ -35,8 +42,6 @@ impl TransportEngine {
     }
 
     /// Bridges two established TCP streams bidirectionally with an inactivity idle timeout.
-    ///
-    /// If neither side transmits any bytes within `idle_timeout`, both streams are gracefully terminated.
     pub async fn bridge_connections(
         inbound: TcpStream,
         outbound: TcpStream,
@@ -53,7 +58,7 @@ impl TransportEngine {
         let (mut ri, mut wi) = inbound.into_split();
         let (mut ro, mut wo) = outbound.into_split();
 
-        // Forward inbound (client) -> outbound (remote)
+        // Forward inbound -> outbound
         let client_to_server = async {
             let mut buf = vec![0u8; 16384];
             let mut total_bytes = 0u64;
@@ -71,7 +76,7 @@ impl TransportEngine {
             Ok::<u64, anyhow::Error>(total_bytes)
         };
 
-        // Forward outbound (remote) -> inbound (client)
+        // Forward outbound -> inbound
         let server_to_client = async {
             let mut buf = vec![0u8; 16384];
             let mut total_bytes = 0u64;

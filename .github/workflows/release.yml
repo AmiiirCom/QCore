@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   # ==========================================================
-  # Job 1: Build and package server and client binaries
+  # Job 1: Build & Separate Server and Client Binaries
   # ==========================================================
   build:
     name: Build - ${{ matrix.arch_name }}
@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- Linux (Debian, Arch, Ubuntu, CentOS, etc.) ---
+          # --- Linux (Debian, Ubuntu, Arch, CentOS, Alpine, etc.) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             arch_name: linux-x86_64-musl
@@ -56,7 +56,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- FreeBSD ---
+          # --- FreeBSD (13 & 14) ---
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             arch_name: freebsd-x86_64
@@ -64,7 +64,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- Windows 10 & 11 (x86_64 and ARM64) ---
+          # --- Windows 10 & 11 (x86_64 & ARM64 Snapdragon) ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             arch_name: windows-x86_64-win10-11
@@ -79,7 +79,7 @@ jobs:
             is_windows: true
             package_deb_arch: false
 
-          # --- Modern macOS (13+ Ventura, Sonoma, Sequoia) ---
+          # --- Modern macOS (macOS 13+ Ventura, Sonoma, Sequoia) ---
           - os: macos-latest
             target: aarch64-apple-darwin
             arch_name: macos-arm64-modern
@@ -121,6 +121,8 @@ jobs:
         if: matrix.use_cross
         run: |
           cross build --release --target ${{ matrix.target }}
+        env:
+          CROSS_CONTAINER_OPTS: "--user root"
 
       # Package Windows binaries into separate server and client archives
       - name: Package Windows Binaries (Separated)
@@ -130,6 +132,7 @@ jobs:
           $tag = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path artifacts
 
+          # Server ZIP Package
           $serverName = "qcore-server-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $serverName
           Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$serverName/"
@@ -138,6 +141,7 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${serverName}.zip" | ForEach-Object { "$($_.Hash)  ${serverName}.zip" } | Out-File -Encoding ascii "${serverName}.zip.sha256"
           cd ..
 
+          # Client ZIP Package
           $clientName = "qcore-client-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $clientName
           Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$clientName/"
@@ -154,6 +158,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p artifacts
 
+          # Server Tarball
           SERVER_NAME="qcore-server-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${SERVER_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-server" "${SERVER_NAME}/"
@@ -162,6 +167,7 @@ jobs:
           shasum -a 256 "${SERVER_NAME}.tar.gz" > "${SERVER_NAME}.tar.gz.sha256"
           cd ..
 
+          # Client Tarball
           CLIENT_NAME="qcore-client-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${CLIENT_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-client" "${CLIENT_NAME}/"
@@ -178,7 +184,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           CLEAN_VER="${TAG#v}"
 
-          # Server Debian Package
+          # Server Debian Package (with automated systemd unit)
           DEB_SERVER="deb_server"
           mkdir -p "${DEB_SERVER}/DEBIAN" "${DEB_SERVER}/usr/local/bin" "${DEB_SERVER}/etc/systemd/system" "${DEB_SERVER}/etc/qcore"
           cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_SERVER}/usr/local/bin/"
@@ -347,7 +353,7 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================
-  # Job 3: Collate and publish release assets
+  # Job 3: Collate and publish release assets with linked commits
   # ==========================================================
   release:
     name: Publish Release
@@ -366,16 +372,20 @@ jobs:
           pattern: package-*
           merge-multiple: true
 
-      - name: Generate Dynamic Changelog
+      - name: Generate Dynamic Changelog with Commit Links
         shell: bash
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
+          export REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+
           if [ -n "$PREV_TAG" ]; then
             export RANGE="${PREV_TAG}..${{ github.ref_name }}"
-            HEADER="## Release Notes for ${{ github.ref_name }} (Changes since $PREV_TAG):"
+            export PREV_TAG="${PREV_TAG}"
+            HEADER="## 📋 Release Notes for ${{ github.ref_name }} (Changes since $PREV_TAG):"
           else
             export RANGE="${{ github.ref_name }}"
-            HEADER="## Release Notes for ${{ github.ref_name }}:"
+            export PREV_TAG=""
+            HEADER="## 📋 Release Notes for ${{ github.ref_name }}:"
           fi
 
           echo "$HEADER" > RELEASE_NOTES.md
@@ -385,7 +395,11 @@ jobs:
           import os
           import subprocess
 
+          repo_url = os.environ.get("REPO_URL", "").rstrip("/")
           range_arg = os.environ.get("RANGE", "HEAD")
+          prev_tag = os.environ.get("PREV_TAG", "")
+          current_tag = "${{ github.ref_name }}"
+
           cmd = ['git', 'log', range_arg, '--pretty=format:__COMMIT__%h|%s|%b']
           res = subprocess.check_output(cmd).decode('utf-8', errors='ignore')
 
@@ -395,18 +409,26 @@ jobs:
               if not c.strip():
                   continue
               parts = c.split('|', 2)
-              h = parts[0]
-              s = parts[1].strip()
+              h = parts[0].strip()
+              s = parts[1].strip() if len(parts) > 1 else ''
               b = parts[2].strip() if len(parts) > 2 else ''
               
-              entry = f'* **{s}** (`{h}`)'
+              if repo_url:
+                  commit_link = f"[`{h}`]({repo_url}/commit/{h})"
+              else:
+                  commit_link = f"`{h}`"
+
+              entry = f"* **{s}** ({commit_link})"
               if b:
                   indented_b = '\n'.join('  > ' + line for line in b.splitlines() if line.strip())
                   entry += f'\n{indented_b}'
               lines.append(entry)
 
           with open('RELEASE_NOTES.md', 'a', encoding='utf-8') as f:
-              f.write('\n\n'.join(lines) + '\n')
+              f.write('\n\n'.join(lines) + '\n\n')
+              if prev_tag and repo_url:
+                  compare_url = f"{repo_url}/compare/{prev_tag}...{current_tag}"
+                  f.write(f"---\n**Full Changelog**: [{prev_tag}...{current_tag}]({compare_url})\n")
           EOF
 
       - name: Create GitHub Release
