@@ -12,7 +12,7 @@ use qcore_crypto::hybrid_kem::HybridClientKEM;
 use qcore_crypto::share_link::ServerPayload;
 use qcore_transport::TransportEngine;
 use rand::{thread_rng, RngCore};
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -54,7 +54,7 @@ impl Socks5Server {
         let nmethods = stream.read_u8().await?;
         let mut methods = vec![0u8; nmethods as usize];
         stream.read_exact(&mut methods).await?;
-        stream.write_all(&[0x05, 0x00]).await?; // No authentication required
+        stream.write_all(&[0x05, 0x00]).await?;
         stream.flush().await?;
 
         // Step 2: Request evaluation
@@ -85,13 +85,11 @@ impl Socks5Server {
             // CMD 0x03: UDP ASSOCIATE (RFC 1928 Section 7)
             0x03 => {
                 let (_client_req_ip, _client_req_port) = Self::parse_address(&mut stream, atyp).await?;
-                
-                // Bind an ephemeral local UDP socket to receive datagrams from the client application
+
                 let udp_socket = Arc::new(UdpSocket::bind("127.0.0.1:0").await?);
                 let local_addr = udp_socket.local_addr()?;
                 let local_port = local_addr.port();
 
-                // Send success reply with the bound UDP port
                 let mut reply = vec![0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1];
                 reply.extend_from_slice(&local_port.to_be_bytes());
                 stream.write_all(&reply).await?;
@@ -99,18 +97,15 @@ impl Socks5Server {
 
                 info!("UDP Associate session established on 127.0.0.1:{}", local_port);
 
-                // Spawn task to process client UDP datagrams
                 let udp_sock_clone = udp_socket.clone();
-                let payload_clone = payload.clone();
                 let udp_worker = tokio::spawn(async move {
                     let mut buf = vec![0u8; 65535];
                     loop {
                         if let Ok((n, src_addr)) = udp_sock_clone.recv_from(&mut buf).await {
-                            if n < 10 { continue; } // Minimum SOCKS5 UDP header length
+                            if n < 10 { continue; }
 
-                            // SOCKS5 UDP Header: RSV(2) + FRAG(1) + ATYP(1) + DST.ADDR + DST.PORT + DATA
                             let frag = buf[2];
-                            if frag != 0 { continue; } // Fragmented packets not supported
+                            if frag != 0 { continue; }
 
                             let atyp = buf[3];
                             let mut cursor = 4;
@@ -143,13 +138,11 @@ impl Socks5Server {
                             cursor += 2;
                             let user_data = &buf[cursor..n];
 
-                            // Forward UDP data via secure tunnel or query resolver
                             debug!("UDP datagram from {} destined for {}:{} ({} bytes)", src_addr, target_host, target_port, user_data.len());
                         }
                     }
                 });
 
-                // The TCP stream must remain open to maintain the UDP association lifetime
                 let mut dummy_buf = [0u8; 1];
                 let _ = stream.read(&mut dummy_buf).await;
                 udp_worker.abort();
@@ -209,7 +202,7 @@ impl Socks5Server {
             "uuid": payload.user_uuid,
             "host": target_host,
             "port": target_port,
-            "sni": payload.get_active_sni(), // Active camouflage rotation selection
+            "sni": payload.get_active_sni(),
         });
         let mut meta_bytes = serde_json::to_vec(&meta)?;
 
@@ -220,7 +213,6 @@ impl Socks5Server {
             .encrypt(Nonce::from_slice(&nonce_bytes), meta_bytes.as_ref())
             .map_err(|e| anyhow!("Handshake encryption error: {e}"))?;
 
-        // Zeroize memory buffers
         shared_secret.zeroize();
         meta_bytes.zeroize();
 

@@ -1,6 +1,6 @@
 {
   "name": "qcore-worker",
-  "version": "0.1.12",
+  "version": "0.1.14",
   "description": "Standalone Obfuscated Cloudflare Worker for QCore",
   "main": "dist/worker.js",
   "scripts": {
