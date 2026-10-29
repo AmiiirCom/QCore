@@ -1,7 +1,4 @@
-//! Secure Share Link Serialization.
-//!
-//! Encrypts server connection configurations using ChaCha20-Poly1305 (RFC 8439)
-//! with salt and nonce components to prevent plaintext exposure of server infrastructure.
+//! Secure Share Link Serialization & SNI Rotation Pooling.
 
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -10,7 +7,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
     ChaCha20Poly1305, Nonce,
 };
-use rand::{thread_rng, RngCore};
+use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
 /// Serializable server connection descriptor and cryptographic parameters.
@@ -18,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct ServerPayload {
     /// Remote server endpoint in `<host>:<port>` format.
     pub endpoint: String,
-    /// SNI domain used for camouflage impersonation.
+    /// SNI camouflage domain or comma-separated pool of domains.
     pub sni: String,
     /// User UUID identifier.
     pub user_uuid: String,
@@ -30,6 +27,18 @@ pub struct ServerPayload {
     pub pq_pub: Vec<u8>,
     /// Underlying transport identifier.
     pub transport: String,
+}
+
+impl ServerPayload {
+    /// Selects an active camouflage domain from the SNI rotation pool.
+    pub fn get_active_sni(&self) -> String {
+        let domains: Vec<&str> = self.sni.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+        if domains.is_empty() {
+            return "swdist.apple.com".to_string();
+        }
+        let selected_idx = thread_rng().gen_range(0..domains.len());
+        domains[selected_idx].to_string()
+    }
 }
 
 /// Engine for encoding and decoding encrypted subscription share links.
