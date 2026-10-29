@@ -17,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: src
+        working-directory: core
     strategy:
       fail-fast: false
       matrix:
@@ -313,7 +313,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src
+        working-directory: core
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
