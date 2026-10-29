@@ -1,0 +1,18 @@
+name = "qcore-worker"
+main = "index.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+# Operating Mode: "DIRECT" (Worker acts as exit proxy) or "RELAY" (Worker shields your VPS)
+MODE = "DIRECT"
+
+# Master authentication token
+AUTH_TOKEN = "qcore-secure-token"
+
+# Fallback camouflage domain for web crawlers and active DPI probes
+FALLBACK_DOMAIN = "swdist.apple.com"
+
+# Settings for RELAY mode (only used when MODE = "RELAY")
+UPSTREAM_HOST = "YOUR_VPS_IP"
+UPSTREAM_PORT = "8443"

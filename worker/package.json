@@ -1,0 +1,13 @@
+{
+  "name": "qcore-worker",
+  "version": "0.1.12",
+  "description": "Standalone Obfuscated Cloudflare Worker for QCore",
+  "main": "dist/worker.js",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "javascript-obfuscator": "^4.1.1"
+  }
+}

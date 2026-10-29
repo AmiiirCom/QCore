@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # --- Linux (Debian, Ubuntu, Arch, CentOS, Alpine, etc.) ---
+          # --- Linux (musl static) ---
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             arch_name: linux-x86_64-musl
@@ -41,7 +41,7 @@ jobs:
             deb_arch: arm64
             pacman_arch: aarch64
 
-          # --- MikroTik RouterOS v7 Targets ---
+          # --- MikroTik RouterOS v7 ---
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             arch_name: mikrotik-routeros-arm64
@@ -56,7 +56,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- FreeBSD (13 & 14) ---
+          # --- FreeBSD ---
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             arch_name: freebsd-x86_64
@@ -64,7 +64,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- Windows 10 & 11 (x86_64 & ARM64 Snapdragon) ---
+          # --- Windows 10 & 11 (x86_64 & ARM64) ---
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             arch_name: windows-x86_64-win10-11
@@ -79,7 +79,7 @@ jobs:
             is_windows: true
             package_deb_arch: false
 
-          # --- Modern macOS (macOS 13+ Ventura, Sonoma, Sequoia) ---
+          # --- macOS Modern (13+) ---
           - os: macos-latest
             target: aarch64-apple-darwin
             arch_name: macos-arm64-modern
@@ -109,22 +109,19 @@ jobs:
 
       - name: Install Cross for Multi-Arch
         if: matrix.use_cross
-        run: |
-          cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build Binaries (Standard)
         if: "!matrix.use_cross"
-        run: |
-          cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build Binaries (Cross)
         if: matrix.use_cross
-        run: |
-          cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }}
         env:
           CROSS_CONTAINER_OPTS: "--user root"
 
-      # Package Windows binaries into separate server and client archives
+      # Package Windows (.zip)
       - name: Package Windows Binaries (Separated)
         if: matrix.is_windows
         shell: pwsh
@@ -132,7 +129,6 @@ jobs:
           $tag = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path artifacts
 
-          # Server ZIP Package
           $serverName = "qcore-server-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $serverName
           Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$serverName/"
@@ -141,7 +137,6 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${serverName}.zip" | ForEach-Object { "$($_.Hash)  ${serverName}.zip" } | Out-File -Encoding ascii "${serverName}.zip.sha256"
           cd ..
 
-          # Client ZIP Package
           $clientName = "qcore-client-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $clientName
           Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$clientName/"
@@ -150,7 +145,7 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${clientName}.zip" | ForEach-Object { "$($_.Hash)  ${clientName}.zip" } | Out-File -Encoding ascii "${clientName}.zip.sha256"
           cd ..
 
-      # Package Unix binaries (.tar.gz)
+      # Package Unix (.tar.gz)
       - name: Package Unix Binaries (Separated)
         if: "!matrix.is_windows"
         shell: bash
@@ -158,7 +153,6 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p artifacts
 
-          # Server Tarball
           SERVER_NAME="qcore-server-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${SERVER_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-server" "${SERVER_NAME}/"
@@ -167,7 +161,6 @@ jobs:
           shasum -a 256 "${SERVER_NAME}.tar.gz" > "${SERVER_NAME}.tar.gz.sha256"
           cd ..
 
-          # Client Tarball
           CLIENT_NAME="qcore-client-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${CLIENT_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-client" "${CLIENT_NAME}/"
@@ -176,15 +169,15 @@ jobs:
           shasum -a 256 "${CLIENT_NAME}.tar.gz" > "${CLIENT_NAME}.tar.gz.sha256"
           cd ..
 
-      # Build native package formats (.deb and .pkg.tar.zst)
-      - name: Build Debian (.deb) and Arch (.pkg.tar.zst) Packages (Separated)
+      # Package .deb and .pkg.tar.zst
+      - name: Build Debian and Arch Packages
         if: matrix.package_deb_arch
         shell: bash
         run: |
           TAG="${{ github.ref_name }}"
           CLEAN_VER="${TAG#v}"
 
-          # Server Debian Package (with automated systemd unit)
+          # Server Debian
           DEB_SERVER="deb_server"
           mkdir -p "${DEB_SERVER}/DEBIAN" "${DEB_SERVER}/usr/local/bin" "${DEB_SERVER}/etc/systemd/system" "${DEB_SERVER}/etc/qcore"
           cp "target/${{ matrix.target }}/release/qcore-server" "${DEB_SERVER}/usr/local/bin/"
@@ -229,7 +222,7 @@ jobs:
           shasum -a 256 "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-server-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
           cd ..
 
-          # Client Debian Package
+          # Client Debian
           DEB_CLIENT="deb_client"
           mkdir -p "${DEB_CLIENT}/DEBIAN" "${DEB_CLIENT}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-client" "${DEB_CLIENT}/usr/local/bin/"
@@ -250,7 +243,7 @@ jobs:
           shasum -a 256 "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
           cd ..
 
-          # Server Arch Linux Package
+          # Server Arch
           ARCH_SERVER="arch_server"
           mkdir -p "${ARCH_SERVER}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_SERVER}/usr/local/bin/"
@@ -274,7 +267,7 @@ jobs:
           shasum -a 256 "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
           cd ..
 
-          # Client Arch Linux Package
+          # Client Arch
           ARCH_CLIENT="arch_client"
           mkdir -p "${ARCH_CLIENT}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_CLIENT}/usr/local/bin/"
@@ -302,11 +295,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: package-${{ matrix.arch_name }}
-          path: src/artifacts/*
+          path: core/artifacts/*
           if-no-files-found: error
 
   # ==========================================================
-  # Job 2: Build Android client components (JNI Libs & CLI)
+  # Job 2: Build Android Client (JNI & Termux)
   # ==========================================================
   build-android:
     name: Build - Android Client
@@ -349,15 +342,68 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: package-android
-          path: src/artifacts/*
+          path: core/artifacts/*
           if-no-files-found: error
 
   # ==========================================================
-  # Job 3: Collate and publish release assets with linked commits
+  # Job 3: Build Standalone Obfuscated Cloudflare Worker
+  # ==========================================================
+  build-worker:
+    name: Build - Cloudflare Worker (Obfuscated)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust Toolchain for WebAssembly
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Compile Rust Core to WebAssembly
+        working-directory: core/crates/qcore-wasm
+        run: wasm-pack build --target web --release
+
+      - name: Bundle and Obfuscate Cloudflare Worker
+        working-directory: worker
+        run: |
+          npm install
+          node build.js
+
+      - name: Package Worker Artifacts
+        working-directory: worker
+        run: |
+          TAG="${{ github.ref_name }}"
+          mkdir -p artifacts
+          cp dist/worker.js "artifacts/qcore-worker-${TAG}-cloudflare-obfuscated.js"
+          zip -j "artifacts/qcore-worker-${TAG}-cloudflare.zip" dist/worker.js
+
+          cd artifacts
+          shasum -a 256 "qcore-worker-${TAG}-cloudflare-obfuscated.js" > "qcore-worker-${TAG}-cloudflare-obfuscated.js.sha256"
+          shasum -a 256 "qcore-worker-${TAG}-cloudflare.zip" > "qcore-worker-${TAG}-cloudflare.zip.sha256"
+          cd ..
+
+      - name: Upload Worker Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-worker
+          path: worker/artifacts/*
+          if-no-files-found: error
+
+  # ==========================================================
+  # Job 4: Collate and publish release assets with commit links
   # ==========================================================
   release:
     name: Publish Release
-    needs: [build, build-android]
+    needs: [build, build-android, build-worker]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code with History

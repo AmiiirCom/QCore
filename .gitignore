@@ -61,3 +61,8 @@ $RECYCLE.BIN/
 # Linux
 *~
 .directory
+
+/pkg/
+**/pkg/
+/node_modules/
+**/node_modules/
