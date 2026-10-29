@@ -1,20 +1,33 @@
 # ==============================================================
-# QCore Industrial Anti-Censorship Core - Git Ignore Rules
+# QCore Official Git Ignore Rules
 # ==============================================================
 
-# --- ۱. خروجی‌های کامپایل و باینری‌های Rust و Cargo ---
+# --- Project Snapshots & Temporary Markdown Dumps ---
+md_snapshot.md
+*.snapshot.md
+
+# --- Rust & Cargo Build Artifacts ---
 target/
 **/target/
 **/*.rs.bk
 *.pdb
+
+# --- Native Executables & Libraries ---
 *.exe
 *.dll
 *.so
 *.dylib
 
-# --- ۲. فایل‌های امنیتی و اطلاعات حساس (بسیار مهم) ---
-# این فایل‌ها حاوی کلیدهای خصوصی پسا-کوانتوم (ML-KEM)، توکن‌ها و UUID هستند
-# و به هیچ وجه نباید در گیت کامیت شوند:
+# --- WebAssembly & Node.js Build Outputs ---
+core/crates/qcore-wasm/pkg/
+**/pkg/
+worker/dist/
+worker/node_modules/
+package-lock.json
+worker/package-lock.json
+
+# --- Sensitive Runtime Configurations & Private Keys ---
+# CRITICAL: Never commit files containing private keys, decapsulation keys, or user tokens!
 server_config.json
 client_config.json
 **/server_config.json
@@ -25,16 +38,18 @@ client_config.json
 *.dat
 *.pfx
 
-# --- ۳. فایل‌های بسته‌بندی محلی و خروجی‌های موقت CI/CD ---
+# --- Packaging, Dist, and CI/CD Output Artifacts ---
 dist/
 artifacts/
 **/artifacts/
 *.zip
 *.tar.gz
+*.deb
+*.pkg.tar.zst
 *.sha256
 RELEASE_NOTES.md
 
-# --- ۴. تنظیمات محیط‌های توسعه و ویرایشگرها (IDEs) ---
+# --- Development Environments & Editors (IDEs) ---
 .vscode/
 .idea/
 *.swp
@@ -44,7 +59,7 @@ RELEASE_NOTES.md
 *.sublime-workspace
 .fleet/
 
-# --- ۵. فایل‌های اضافی سیستم‌عامل‌ها (ویندوز، مک و لینوکس) ---
+# --- Operating System Noise Files ---
 # Windows
 Thumbs.db
 ehthumbs.db
@@ -61,8 +76,3 @@ $RECYCLE.BIN/
 # Linux
 *~
 .directory
-
-/pkg/
-**/pkg/
-/node_modules/
-**/node_modules/

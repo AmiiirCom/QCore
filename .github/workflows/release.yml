@@ -41,7 +41,7 @@ jobs:
             deb_arch: arm64
             pacman_arch: aarch64
 
-          # --- MikroTik RouterOS v7 ---
+          # --- MikroTik RouterOS v7 Targets ---
           - os: ubuntu-latest
             target: aarch64-unknown-linux-musl
             arch_name: mikrotik-routeros-arm64
@@ -56,7 +56,7 @@ jobs:
             is_windows: false
             package_deb_arch: false
 
-          # --- FreeBSD ---
+          # --- FreeBSD (13 & 14) ---
           - os: ubuntu-latest
             target: x86_64-unknown-freebsd
             arch_name: freebsd-x86_64
@@ -79,7 +79,7 @@ jobs:
             is_windows: true
             package_deb_arch: false
 
-          # --- macOS Modern (13+) ---
+          # --- Modern macOS (13+ Ventura, Sonoma, Sequoia) ---
           - os: macos-latest
             target: aarch64-apple-darwin
             arch_name: macos-arm64-modern
@@ -129,6 +129,7 @@ jobs:
           $tag = "${{ github.ref_name }}"
           New-Item -ItemType Directory -Force -Path artifacts
 
+          # Server ZIP
           $serverName = "qcore-server-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $serverName
           Copy-Item "target/${{ matrix.target }}/release/qcore-server.exe" "$serverName/"
@@ -137,6 +138,7 @@ jobs:
           Get-FileHash -Algorithm SHA256 "${serverName}.zip" | ForEach-Object { "$($_.Hash)  ${serverName}.zip" } | Out-File -Encoding ascii "${serverName}.zip.sha256"
           cd ..
 
+          # Client ZIP
           $clientName = "qcore-client-${tag}-${{ matrix.arch_name }}"
           New-Item -ItemType Directory -Force -Path $clientName
           Copy-Item "target/${{ matrix.target }}/release/qcore-client.exe" "$clientName/"
@@ -153,6 +155,7 @@ jobs:
           TAG="${{ github.ref_name }}"
           mkdir -p artifacts
 
+          # Server Tarball
           SERVER_NAME="qcore-server-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${SERVER_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-server" "${SERVER_NAME}/"
@@ -161,6 +164,7 @@ jobs:
           shasum -a 256 "${SERVER_NAME}.tar.gz" > "${SERVER_NAME}.tar.gz.sha256"
           cd ..
 
+          # Client Tarball
           CLIENT_NAME="qcore-client-${TAG}-${{ matrix.arch_name }}"
           mkdir -p "${CLIENT_NAME}"
           cp "target/${{ matrix.target }}/release/qcore-client" "${CLIENT_NAME}/"
@@ -243,7 +247,7 @@ jobs:
           shasum -a 256 "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb" > "qcore-client-${TAG}-linux-${{ matrix.deb_arch }}.deb.sha256"
           cd ..
 
-          # Server Arch
+          # Server Arch Linux
           ARCH_SERVER="arch_server"
           mkdir -p "${ARCH_SERVER}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-server" "${ARCH_SERVER}/usr/local/bin/"
@@ -267,7 +271,7 @@ jobs:
           shasum -a 256 "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst" > "qcore-server-${TAG}-arch-${{ matrix.pacman_arch }}.pkg.tar.zst.sha256"
           cd ..
 
-          # Client Arch
+          # Client Arch Linux
           ARCH_CLIENT="arch_client"
           mkdir -p "${ARCH_CLIENT}/usr/local/bin"
           cp "target/${{ matrix.target }}/release/qcore-client" "${ARCH_CLIENT}/usr/local/bin/"
@@ -361,7 +365,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        run: cargo install wasm-pack
+        uses: taiki-e/install-action@wasm-pack
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -406,10 +410,13 @@ jobs:
     needs: [build, build-android, build-worker]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code with History
+      - name: Checkout Code with Full Git History
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Fetch All Remote Tags
+        run: git fetch --tags --force
 
       - name: Download Built Artifacts
         uses: actions/download-artifact@v4
@@ -423,6 +430,7 @@ jobs:
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}^" 2>/dev/null || true)
           export REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          export CURRENT_TAG="${{ github.ref_name }}"
 
           if [ -n "$PREV_TAG" ]; then
             export RANGE="${PREV_TAG}..${{ github.ref_name }}"
@@ -444,7 +452,7 @@ jobs:
           repo_url = os.environ.get("REPO_URL", "").rstrip("/")
           range_arg = os.environ.get("RANGE", "HEAD")
           prev_tag = os.environ.get("PREV_TAG", "")
-          current_tag = "${{ github.ref_name }}"
+          current_tag = os.environ.get("CURRENT_TAG", "")
 
           cmd = ['git', 'log', range_arg, '--pretty=format:__COMMIT__%h|%s|%b']
           res = subprocess.check_output(cmd).decode('utf-8', errors='ignore')
@@ -474,7 +482,7 @@ jobs:
               f.write('\n\n'.join(lines) + '\n\n')
               if prev_tag and repo_url:
                   compare_url = f"{repo_url}/compare/{prev_tag}...{current_tag}"
-                  f.write(f"---\n**Full Changelog**: [{prev_tag}...{current_tag}]({compare_url})\n")
+                  f.write(f"---\n**Full Diff**: [{prev_tag}...{current_tag}]({compare_url})\n")
           EOF
 
       - name: Create GitHub Release
